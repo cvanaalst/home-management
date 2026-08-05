@@ -56,7 +56,7 @@ import {
  * — that is the documented route (see the setup guide in the blueprint). An
  * OAuth client ID for a browser app is NOT a secret; it is safe in source.
  */
-const DEFAULT_CLIENT_ID = "";
+const DEFAULT_CLIENT_ID = "236659380710-npqb9gbgr470bbfrppcksbqbluic4d68.apps.googleusercontent.com";
 
 const SCOPE = "https://www.googleapis.com/auth/drive.file";
 const FOLDER_NAME = "Huisbeheer";
