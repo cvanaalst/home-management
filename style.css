@@ -172,24 +172,24 @@
 :root,
 :root[data-theme="dark"],
 :root[data-theme="midnight"] {
-  --type-note: #5ec8d8;
   --type-document: #6ba8e8;
-  --type-contact: #a78bfa;
-  --type-warranty: #5fd08a;
-  --type-insurance: #e8c05e;
-  --type-maintenance: #f0975a;
+  --type-configuration: #5ec8d8;
   --type-account: #f08aa8;
+  --type-utilities: #e8c05e;
+  --type-devices: #a78bfa;
+  --type-calendar: #f0975a;
+  --type-various: #93a3b4;
 }
 
 :root[data-theme="light"],
 :root[data-theme="paper"] {
-  --type-note: #0f7b8c;
   --type-document: #1e5fa8;
-  --type-contact: #6d3fd4;
-  --type-warranty: #1e7a48;
-  --type-insurance: #8a6510;
-  --type-maintenance: #b25415;
+  --type-configuration: #0f7b8c;
   --type-account: #b03258;
+  --type-utilities: #8a6510;
+  --type-devices: #6d3fd4;
+  --type-calendar: #b25415;
+  --type-various: #5c6b7a;
 }
 
 /* ==========================================================================

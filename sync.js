@@ -112,6 +112,18 @@ export async function getClientId() {
   return String(stored || DEFAULT_CLIENT_ID || "").trim();
 }
 
+/**
+ * True when this build ships its own client ID.
+ *
+ * The settings panel uses it to hide the credentials field entirely: if the
+ * deployment already carries an ID there is nothing to enter, and leaving an
+ * empty-looking box on screen above a working sync only invites someone to
+ * paste something into it and break their own setup.
+ */
+export function hasBuiltInClientId() {
+  return !!String(DEFAULT_CLIENT_ID || "").trim();
+}
+
 export async function setClientId(value) {
   await setMeta(META.clientId, String(value || "").trim());
   await setMeta(META.token, null); // a different project means a different token

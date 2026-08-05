@@ -200,7 +200,10 @@
         </div>
         <p class="storage__counts" id="sync-last"></p>
 
-        <div class="field field--stack">
+        <!-- Hidden entirely when sync.js ships a DEFAULT_CLIENT_ID: there is
+             nothing for the user to do, and an empty-looking credentials box
+             above a working sync only invites someone to "fix" it. -->
+        <div class="field field--stack" id="sync-client-id-field">
           <label class="field__label" for="sync-client-id" data-i18n="sync.clientId">OAuth client ID</label>
           <input type="text" class="input" id="sync-client-id" autocomplete="off"
                  spellcheck="false" data-i18n-placeholder="sync.clientId.placeholder">

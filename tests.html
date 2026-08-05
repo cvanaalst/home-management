@@ -49,7 +49,7 @@ import {
   planRestore, planPurge, MEDIA_SEPARATOR,
 } from "./merge.js";
 import {
-  makeId, makeRecord, hydrateRecord, TYPES, DEFAULT_TYPE, SORT_FIELDS,
+  makeId, makeRecord, hydrateRecord, normalizeType, TYPES, DEFAULT_TYPE, SORT_FIELDS,
   normalizeSearchText, buildHaystack, stripTrackingParams, normalizeUrl,
   queryItemSet, makeComparator,
   computeStats, weekStart, bucketItemsByWeek, sortTagsByRecency,
@@ -841,11 +841,11 @@ group("report.js · toCsv");
 {
   const stub = (key) => key;
   const records = [
-    fx({ id: "a", type: "note", title: "Alarm", tags: ["code", "veiligheid"],
+    fx({ id: "a", type: "configuration", title: "Alarm", tags: ["code", "veiligheid"],
          reminderAt: "2026-09-01", reminderType: "Controle", pinned: true,
          links: [{ id: "1", label: "Portaal", url: "https://a.example" }],
          attachments: [{ mediaId: "m", filename: "doc.pdf" }] }),
-    fx({ id: "b", type: "warranty", title: "Ketel" }),
+    fx({ id: "b", type: "devices", title: "Ketel" }),
     fx({ id: "z", title: "Weg", deletedAt: "2026-01-01T00:00:00.000Z" }),
   ];
   const csv = toCsv(records, { t: stub, lang: "nl" });
@@ -864,7 +864,7 @@ group("report.js · toCsv");
 assertTrue(toCsv([], { t: (k) => k }).split("\r\n")[0].length > 0, "an empty set still yields a header");
 assertTrue(toCsv(null, { t: (k) => k }).length > 0, "a null set does not throw");
 {
-  const row = recordToRow(fx({ type: "note", title: "X", pinned: false }), { t: (k) => k });
+  const row = recordToRow(fx({ type: "configuration", title: "X", pinned: false }), { t: (k) => k });
   assertEqual(row.pinned, "", "not pinned is an empty cell, not 'false'");
   assertEqual(recordToRow(fx({ pinned: true }), { t: (k) => k }).pinned, "1", "pinned is 1");
 }
@@ -890,15 +890,15 @@ group("report.js · groupByType");
 
 {
   const records = [
-    fx({ id: "1", type: "note", title: "Zebra" }),
-    fx({ id: "2", type: "warranty", title: "Boiler" }),
-    fx({ id: "3", type: "note", title: "alpha" }),
-    fx({ id: "4", type: "note", title: "Item 10" }),
-    fx({ id: "5", type: "note", title: "Item 2" }),
-    fx({ id: "6", type: "note", title: "Gone", deletedAt: "2026-01-01T00:00:00.000Z" }),
+    fx({ id: "1", type: "configuration", title: "Zebra" }),
+    fx({ id: "2", type: "devices", title: "Boiler" }),
+    fx({ id: "3", type: "configuration", title: "alpha" }),
+    fx({ id: "4", type: "configuration", title: "Item 10" }),
+    fx({ id: "5", type: "configuration", title: "Item 2" }),
+    fx({ id: "6", type: "configuration", title: "Gone", deletedAt: "2026-01-01T00:00:00.000Z" }),
   ];
   const groups = groupByType(records, TYPES);
-  assertDeepEqual(groups.map((g) => g.type), ["note", "warranty"], "only types in use appear, in canonical order");
+  assertDeepEqual(groups.map((g) => g.type), ["configuration", "devices"], "only types in use appear, in canonical order");
   assertDeepEqual(
     groups[0].records.map((r) => r.title),
     ["alpha", "Item 2", "Item 10", "Zebra"],
@@ -914,7 +914,7 @@ group("report.js · buildPrintHtml");
 {
   const stub = (key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key);
   const records = [
-    fx({ id: "a", type: "insurance", title: "ENGIE", body: "**vet** en `code`",
+    fx({ id: "a", type: "utilities", title: "ENGIE", body: "**vet** en `code`",
          tags: ["contract"], comment: "opgezegd", reminderAt: "2026-08-01",
          reminderType: "Jaarlijks", pinned: true,
          links: [{ id: "1", label: "Portaal", url: "https://engie.example/x" }],
@@ -1038,7 +1038,7 @@ group("db.js · makeRecord (the §5 envelope)");
   assertTrue(!Number.isNaN(Date.parse(r.createdAt)), "createdAt is a parseable ISO string");
 }
 
-assertEqual(makeRecord({ type: "warranty" }).type, "warranty", "accepts a known type");
+assertEqual(makeRecord({ type: "devices" }).type, "devices", "accepts a known type");
 assertEqual(makeRecord({ type: "nonsense" }).type, DEFAULT_TYPE, "rejects an unknown type");
 assertEqual(makeRecord({ type: null }).type, DEFAULT_TYPE, "null type falls back to the default");
 
@@ -1091,6 +1091,39 @@ assertEqual(hydrateRecord({ id: "x", reminderAt: "" }).reminderAt, null, "an emp
 // ═══════════════════════════════════════════════════════════════════════════
 // db.js — text normalisation
 // ═══════════════════════════════════════════════════════════════════════════
+group("db.js · normalizeType (legacy type migration)");
+
+// Types the app shipped before build 17. Any record still carrying one must
+// land on a sensible replacement, NOT silently collapse to the default — sync
+// writes back through the same hydration path, so a wrong answer here is
+// persisted and cannot be undone.
+assertEqual(normalizeType("document"), "document", "document kept its name");
+assertEqual(normalizeType("account"), "account", "account kept its name");
+assertEqual(normalizeType("warranty"), "devices", "warranty -> devices");
+assertEqual(normalizeType("insurance"), "utilities", "insurance -> utilities");
+assertEqual(normalizeType("maintenance"), "calendar", "maintenance -> calendar");
+assertEqual(normalizeType("note"), "various", "note -> various");
+assertEqual(normalizeType("contact"), "various", "contact -> various");
+assertEqual(normalizeType("nonsense"), DEFAULT_TYPE, "an unknown type falls back to the default");
+assertEqual(normalizeType(""), DEFAULT_TYPE, "an empty type falls back to the default");
+assertEqual(normalizeType(null), DEFAULT_TYPE, "a null type falls back to the default");
+assertEqual(normalizeType(undefined), DEFAULT_TYPE, "a missing type falls back to the default");
+{
+  const mapped = ["document", "account", "warranty", "insurance", "maintenance", "note", "contact"]
+    .map(normalizeType)
+    .filter((type) => !TYPES.includes(type));
+  assertDeepEqual(mapped, [], "every legacy type maps onto a CURRENT type, never a dangling one");
+}
+{
+  // The migration has to survive the real read path, not just the helper.
+  const legacy = { id: "old", type: "insurance", title: "ENGIE", updatedAt: "2025-01-01T00:00:00.000Z" };
+  const hydrated = hydrateRecord(legacy);
+  assertEqual(hydrated.type, "utilities", "a stored legacy record is migrated on READ");
+  assertEqual(hydrated.title, "ENGIE", "…without disturbing anything else");
+  assertEqual(hydrated.updatedAt, "2025-01-01T00:00:00.000Z",
+    "…and without touching updatedAt, so the migration alone never wins a merge");
+}
+
 group("db.js · normalizeSearchText");
 
 assertEqual(normalizeSearchText("Hello"), "hello", "lower-cases");
@@ -1225,11 +1258,11 @@ assertDeepEqual(ids(queryItemSet([null, undefined, fx({ id: "a" })])), ["a"], "s
 
 {
   const items = [
-    fx({ id: "n", type: "note" }),
-    fx({ id: "w", type: "warranty" }),
-    fx({ id: "c", type: "contact" }),
+    fx({ id: "n", type: "configuration" }),
+    fx({ id: "w", type: "devices" }),
+    fx({ id: "c", type: "calendar" }),
   ];
-  assertDeepEqual(ids(queryItemSet(items, { type: "warranty" })), ["w"], "filters by type");
+  assertDeepEqual(ids(queryItemSet(items, { type: "devices" })), ["w"], "filters by type");
   assertEqual(queryItemSet(items, { type: "" }).total, 3, "an empty type means every type");
   assertEqual(queryItemSet(items, { type: "nope" }).total, 0, "an unknown type matches nothing");
 }
@@ -1399,20 +1432,20 @@ group("db.js · computeStats");
 {
   const today = "2026-08-04";
   const items = [
-    fx({ id: "a", type: "note", pinned: true, tags: ["water"], reminderAt: "2026-08-01" }),   // overdue
-    fx({ id: "b", type: "note", tags: ["water", "gas"], reminderAt: "2026-08-04" }),          // today
-    fx({ id: "c", type: "warranty", reminderAt: "2026-08-09" }),                              // this week
-    fx({ id: "d", type: "warranty", reminderAt: "2026-12-01" }),                              // far off
-    fx({ id: "e", type: "contact", links: [{ id: "1", label: "x", url: "https://a.b" }] }),
-    fx({ id: "f", type: "contact", attachments: [{ mediaId: "m", filename: "f.pdf" }] }),
-    fx({ id: "z", type: "note", deletedAt: "2026-07-01T00:00:00.000Z" }),
+    fx({ id: "a", type: "configuration", pinned: true, tags: ["water"], reminderAt: "2026-08-01" }),   // overdue
+    fx({ id: "b", type: "configuration", tags: ["water", "gas"], reminderAt: "2026-08-04" }),          // today
+    fx({ id: "c", type: "devices", reminderAt: "2026-08-09" }),                              // this week
+    fx({ id: "d", type: "devices", reminderAt: "2026-12-01" }),                              // far off
+    fx({ id: "e", type: "calendar", links: [{ id: "1", label: "x", url: "https://a.b" }] }),
+    fx({ id: "f", type: "calendar", attachments: [{ mediaId: "m", filename: "f.pdf" }] }),
+    fx({ id: "z", type: "configuration", deletedAt: "2026-07-01T00:00:00.000Z" }),
   ];
   const s = computeStats(items, today);
   assertEqual(s.total, 6, "total excludes tombstones");
   assertEqual(s.deleted, 1, "deleted counts the tombstones");
-  assertEqual(s.byType.note, 2, "per-type count for note");
-  assertEqual(s.byType.warranty, 2, "per-type count for warranty");
-  assertEqual(s.byType.insurance, 0, "an unused type reports zero rather than being absent");
+  assertEqual(s.byType.configuration, 2, "per-type count for configuration");
+  assertEqual(s.byType.devices, 2, "per-type count for devices");
+  assertEqual(s.byType.utilities, 0, "an unused type reports zero rather than being absent");
   assertEqual(s.pinned, 1, "counts pinned");
   assertEqual(s.withReminder, 4, "counts records carrying a reminder");
   assertEqual(s.overdue, 1, "counts overdue reminders");
@@ -1569,10 +1602,10 @@ await openDB();
 await clearItems();
 
 {
-  const saved = await putItem(makeRecord({ id: "r1", title: "Alarm", type: "note" }));
+  const saved = await putItem(makeRecord({ id: "r1", title: "Alarm", type: "configuration" }));
   const read = await getItem("r1");
   assertEqual(read.title, "Alarm", "a written record reads back");
-  assertEqual(read.type, "note", "the type round-trips");
+  assertEqual(read.type, "configuration", "the type round-trips");
   assertTrue(read.updatedAt >= saved.createdAt, "updatedAt is stamped on write");
   assertEqual(await getItem("nope"), null, "an unknown id reads back null");
   assertEqual(await getItem(""), null, "an empty id reads back null");
@@ -1711,12 +1744,12 @@ group("db.js · IndexedDB — stats and storage");
 {
   await clearItems();
   await putItems([
-    makeRecord({ id: "s1", type: "warranty", reminderAt: "2026-08-01" }),
-    makeRecord({ id: "s2", type: "note" }),
+    makeRecord({ id: "s1", type: "devices", reminderAt: "2026-08-01" }),
+    makeRecord({ id: "s2", type: "configuration" }),
   ]);
   const s = await getStats("2026-08-04");
   assertEqual(s.total, 2, "getStats reads the live store");
-  assertEqual(s.byType.warranty, 1, "…and breaks down by type");
+  assertEqual(s.byType.devices, 1, "…and breaks down by type");
   assertEqual(s.overdue, 1, "…and honours the `today` it is given");
 
   const estimate = await getStorageEstimate();
@@ -1749,9 +1782,9 @@ assertEqual(t("list.count", { count: 0, total: 0 }), "0 of 0", "interpolates zer
 assertEqual(t("list.count", {}), "{count} of {total}", "leaves unknown placeholders in place");
 assertEqual(t("list.count"), "{count} of {total}", "no vars leaves the raw template");
 assertEqual(t("no.such.key"), "no.such.key", "an unknown key returns the key itself");
-assertEqual(typeLabel("warranty"), "Warranty", "typeLabel translates a type");
+assertEqual(typeLabel("devices"), "Devices", "typeLabel translates a type");
 setLang("nl");
-assertEqual(typeLabel("warranty"), "Garantie", "typeLabel follows the language");
+assertEqual(typeLabel("devices"), "Apparaten", "typeLabel follows the language");
 
 group("i18n.js · dictionary parity");
 
@@ -1799,7 +1832,7 @@ assertEqual(icon("definitely-not-a-glyph"), "", "an unknown glyph renders nothin
   const missing = TYPES.filter((type) => typeIcon(type) !== `type-${type}`);
   assertDeepEqual(missing, [], "every record type has its own glyph");
 }
-assertEqual(typeIcon("nonsense"), "type-note", "an unknown type falls back to the note glyph");
+assertEqual(typeIcon("nonsense"), "type-various", "an unknown type falls back to the catch-all glyph");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // version.js

@@ -29,16 +29,43 @@
  * a different schema — that keeps the platform layer field-agnostic (§5).
  */
 export const TYPES = [
-  "note",
   "document",
-  "contact",
-  "warranty",
-  "insurance",
-  "maintenance",
+  "configuration",
   "account",
+  "utilities",
+  "devices",
+  "calendar",
+  "various",
 ];
 
-export const DEFAULT_TYPE = "note";
+export const DEFAULT_TYPE = "various";
+
+/**
+ * Types used by an earlier version of this app, mapped to their replacements.
+ *
+ * Applied at READ time by hydrateRecord(), never by rewriting the store on
+ * upgrade (§6). Without this every existing record would fall through the
+ * `TYPES.includes(...)` guard to DEFAULT_TYPE and lose its categorisation — and
+ * because sync writes back through the same hydration path, that loss would be
+ * persisted on the next sync and could not be undone.
+ *
+ * Safe to delete once no device can still be holding pre-build-17 records; it
+ * costs one map lookup per read until then.
+ */
+const LEGACY_TYPES = {
+  note: "various",
+  contact: "various",
+  warranty: "devices",
+  insurance: "utilities",
+  maintenance: "calendar",
+  // "document" and "account" kept their names and need no entry.
+};
+
+/** Resolve any stored type to a current one. PURE. */
+export function normalizeType(type) {
+  if (TYPES.includes(type)) return type;
+  return LEGACY_TYPES[type] || DEFAULT_TYPE;
+}
 
 export const SORT_FIELDS = ["updatedAt", "createdAt", "title", "reminderAt"];
 
@@ -105,7 +132,7 @@ export function makeRecord(fields = {}) {
   const now = new Date().toISOString();
   return {
     id: fields.id || makeId(),
-    type: TYPES.includes(fields.type) ? fields.type : DEFAULT_TYPE,
+    type: normalizeType(fields.type),
 
     createdAt: fields.createdAt || now,
     updatedAt: fields.updatedAt || now,
@@ -146,7 +173,7 @@ function stripUndefined(obj) {
 /** Fields whose type must be right or the query engine throws. */
 function coerce(raw) {
   return {
-    type: TYPES.includes(raw.type) ? raw.type : DEFAULT_TYPE,
+    type: normalizeType(raw.type),
     tags: Array.isArray(raw.tags) ? raw.tags : [],
     linkedIds: Array.isArray(raw.linkedIds) ? raw.linkedIds : [],
     links: Array.isArray(raw.links) ? raw.links : [],

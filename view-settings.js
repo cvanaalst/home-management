@@ -37,6 +37,7 @@ import {
   onSyncStatus,
   redirectUri,
   javascriptOrigin,
+  hasBuiltInClientId,
 } from "./sync.js";
 import { confirmDialog, trapFocus } from "./ui.js";
 
@@ -197,10 +198,16 @@ export async function paintSync() {
     ? t("sync.lastAt", { when: formatDateTime(stateNow.lastSyncAt, state.lang) })
     : t("sync.never");
 
-  const field = $("sync-client-id");
-  if (document.activeElement !== field) field.value = await getClientId();
-  $("sync-origin").textContent = t("sync.clientId.origin", { origin: javascriptOrigin() });
-  $("sync-redirect-uri").textContent = t("sync.clientId.redirect", { uri: redirectUri() });
+  // A build that ships its own client ID needs no credentials UI at all.
+  const builtIn = hasBuiltInClientId();
+  $("sync-client-id-field").hidden = builtIn;
+  if (!builtIn) {
+    const field = $("sync-client-id");
+    // Never clobber what the user is halfway through typing.
+    if (document.activeElement !== field) field.value = await getClientId();
+    $("sync-origin").textContent = t("sync.clientId.origin", { origin: javascriptOrigin() });
+    $("sync-redirect-uri").textContent = t("sync.clientId.redirect", { uri: redirectUri() });
+  }
   $("sync-enabled").checked = await isSyncEnabled();
 }
 

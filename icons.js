@@ -59,20 +59,27 @@ const GLYPHS = {
     '<path d="M12 3.5a6 6 0 0 0-6 6c0 5-2 6.5-2 6.5h16s-2-1.5-2-6.5a6 6 0 0 0-6-6z"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/>',
 
   // ── the seven record types ────────────────────────────────────────────────
-  "type-note":
-    '<path d="M5 4.5h14v10l-5 5H5z"/><path d="M19 14.5h-5v5"/><path d="M8.5 9h7M8.5 12.5h4.5"/>',
+  // A page with a folded corner.
   "type-document":
     '<path d="M7 3.5h7l4 4v13H7z"/><path d="M14 3.5v4h4"/><path d="M10 13h5M10 16.5h5"/>',
-  "type-contact":
-    '<circle cx="12" cy="8" r="3.6"/><path d="M5 20.5c0-4 3.1-6.2 7-6.2s7 2.2 7 6.2"/>',
-  "type-warranty":
-    '<path d="M12 3l7.5 3v6.2c0 4.6-3.2 7.8-7.5 9.3-4.3-1.5-7.5-4.7-7.5-9.3V6z"/><path d="M9 12l2.2 2.2L15.5 10"/>',
-  "type-insurance":
-    '<path d="M12 3.5v2M3.5 13.5a8.5 8.5 0 0 1 17 0z"/><path d="M12 13.5v5.6a2.6 2.6 0 0 0 5.2 0"/>',
-  "type-maintenance":
-    '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"/>',
+  // Sliders — settings written down, not the app's own settings.
+  "type-configuration":
+    '<path d="M4 7h5M14 7h6M4 12h9M18 12h2M4 17h2M11 17h9"/><circle cx="11.5" cy="7" r="2"/><circle cx="15.5" cy="12" r="2"/><circle cx="8.5" cy="17" r="2"/>',
+  // A key.
   "type-account":
     '<circle cx="16" cy="8" r="3.6"/><path d="M13.4 10.6L4 20M6.8 17.2l2.1 2.1M9.6 14.4l2.1 2.1"/>',
+  // A droplet and a bolt: water, gas, electricity, internet.
+  "type-utilities":
+    '<path d="M7 3.5c2.6 3 4 5.3 4 7a4 4 0 0 1-8 0c0-1.7 1.4-4 4-7z"/><path d="M17 3.5l-3.5 6h4L14 20.5"/>',
+  // A screen on a stand.
+  "type-devices":
+    '<rect x="3" y="4.5" width="18" height="11.5" rx="1.8"/><path d="M9 20h6M12 16v4"/>',
+  // A calendar page.
+  "type-calendar":
+    '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M8 14h3"/>',
+  // Three dots — the catch-all.
+  "type-various":
+    '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/>',
 };
 
 /** Every glyph name — used by tests.html to prove nothing references a typo. */
@@ -109,5 +116,5 @@ export function iconEl(name, opts = {}) {
 
 /** Glyph name for a record type, so callers never build the string themselves. */
 export function typeIcon(type) {
-  return GLYPHS[`type-${type}`] ? `type-${type}` : "type-note";
+  return GLYPHS[`type-${type}`] ? `type-${type}` : "type-various";
 }

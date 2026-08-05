@@ -40,13 +40,13 @@ const dict = {
     "view.help.title": "Help",
 
     // ── record types ────────────────────────────────────────────────────────
-    "type.note": "Notitie",
     "type.document": "Document",
-    "type.contact": "Contact",
-    "type.warranty": "Garantie",
-    "type.insurance": "Verzekering",
-    "type.maintenance": "Onderhoud",
+    "type.configuration": "Configuratie",
     "type.account": "Account",
+    "type.utilities": "Nutsvoorzieningen",
+    "type.devices": "Apparaten",
+    "type.calendar": "Kalender",
+    "type.various": "Diversen",
     "type.all": "Alles",
     "type.label": "Soort",
 
@@ -414,13 +414,13 @@ const dict = {
     "view.help.title": "Help",
 
     // ── record types ────────────────────────────────────────────────────────
-    "type.note": "Note",
     "type.document": "Document",
-    "type.contact": "Contact",
-    "type.warranty": "Warranty",
-    "type.insurance": "Insurance",
-    "type.maintenance": "Maintenance",
+    "type.configuration": "Configuration",
     "type.account": "Account",
+    "type.utilities": "Utilities",
+    "type.devices": "Devices",
+    "type.calendar": "Calendar",
+    "type.various": "Various",
     "type.all": "All",
     "type.label": "Type",
 
