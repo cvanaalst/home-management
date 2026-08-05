@@ -356,6 +356,8 @@ const dict = {
     "status.offline": "Geen verbinding",
     "status.loading": "Laden…",
     "status.soon": "Komt in een volgende fase",
+    "update.available": "Nieuwe versie beschikbaar",
+    "update.reload": "Herladen",
 
     // ── toasts ──────────────────────────────────────────────────────────────
     "toast.saved": "Opgeslagen",
@@ -728,6 +730,8 @@ const dict = {
     "status.offline": "No connection",
     "status.loading": "Loading…",
     "status.soon": "Coming in a later phase",
+    "update.available": "A new version is available",
+    "update.reload": "Reload",
 
     // ── toasts ──────────────────────────────────────────────────────────────
     "toast.saved": "Saved",

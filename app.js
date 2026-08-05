@@ -289,13 +289,80 @@ function bindConnectivity() {
   sync();
 }
 
+/**
+ * Register the service worker and offer the user a reload when a new build is
+ * ready (§13.13, §15.2).
+ *
+ * Without this, a returning visitor keeps the old app until they happen to
+ * hard-reload — and they never will, because the old app looks like it is
+ * working. You push a fix, see it yourself because you clear caches, and every
+ * other device silently stays a version behind for weeks. The build number in
+ * Settings ▸ About is only trustworthy once this exists.
+ */
 function registerServiceWorker() {
   // file:// has no service-worker support; skip rather than log an exception.
   if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").catch((err) => {
+
+  let reloading = false;
+  // The swap finishes by reloading exactly once. Guarding this matters: a
+  // controllerchange during an already-running reload would loop the page.
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloading) return;
+    reloading = true;
+    location.reload();
+  });
+
+  window.addEventListener("load", async () => {
+    let registration;
+    try {
+      registration = await navigator.serviceWorker.register("sw.js");
+    } catch (err) {
       console.warn("Service worker registration failed:", err.message);
+      return;
+    }
+
+    // A build may already have been sitting in waiting since a previous visit.
+    if (registration.waiting && navigator.serviceWorker.controller) {
+      offerUpdate(registration.waiting);
+    }
+
+    registration.addEventListener("updatefound", () => {
+      const incoming = registration.installing;
+      if (!incoming) return;
+      incoming.addEventListener("statechange", () => {
+        // No controller means this is the FIRST install, not an update —
+        // there is nothing for the user to reload into.
+        if (incoming.state === "installed" && navigator.serviceWorker.controller) {
+          offerUpdate(incoming);
+        }
+      });
     });
+
+    // A long-lived tab (an installed PWA is often never closed) would never
+    // ask again on its own. Re-check whenever it comes back to the foreground,
+    // throttled so tab-flicking does not hammer the server.
+    let lastCheck = Date.now();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastCheck < 60000) return;
+      lastCheck = Date.now();
+      registration.update().catch(() => {
+        /* offline, or the server is unreachable — try again next time */
+      });
+    });
+  });
+}
+
+/** The reload prompt. Stays put until answered — a 6-second toast would be missed. */
+function offerUpdate(worker) {
+  toast(t("update.available"), "info", {
+    actionLabel: t("update.reload"),
+    duration: 0,
+    onAction: () => {
+      // The worker is waiting on purpose; tell it to take over. That fires
+      // controllerchange above, which reloads into the new build as a whole.
+      worker.postMessage({ type: "SKIP_WAITING" });
+    },
   });
 }
 

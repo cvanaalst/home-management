@@ -43,7 +43,11 @@ let activeToast = null;
  *
  * @param {string} message      already translated
  * @param {"info"|"success"|"error"} [kind]
- * @param {{actionLabel?:string, onAction?:Function, onExpire?:Function, duration?:number}} [opts]
+ * @param {{actionLabel?:string, onAction?:Function, onExpire?:Function,
+ *          duration?:number}} [opts]
+ *   `duration: 0` means the toast never expires on its own — for a prompt the
+ *   user must actually answer, like "a new version is ready". Anything that
+ *   auto-dismisses is a message; anything that waits is a question.
  */
 export function toast(message, kind = "info", opts = {}) {
   dismissToast(true); // an older toast's expiry must still run
@@ -92,7 +96,10 @@ export function toast(message, kind = "info", opts = {}) {
   el.append(close);
 
   host.append(el);
-  const timer = setTimeout(() => finish(true), opts.duration || TOAST_MS);
+  // An explicit 0 must survive: `opts.duration || TOAST_MS` would treat it as
+  // "unset" and quietly dismiss a prompt that was meant to persist.
+  const duration = opts.duration === 0 ? 0 : opts.duration || TOAST_MS;
+  const timer = duration > 0 ? setTimeout(() => finish(true), duration) : null;
   activeToast = { el, finish };
 }
 

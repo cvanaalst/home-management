@@ -18,7 +18,7 @@
  * wonder why the suite stopped updating.
  */
 
-const CACHE_VERSION = "hms-v14";
+const CACHE_VERSION = "hms-v16";
 
 const PRECACHE = [
   "./",
@@ -64,9 +64,24 @@ self.addEventListener("install", (event) => {
       // addAll is atomic: one 404 and the whole install fails loudly, which is
       // what we want — a half-populated cache is worse than none.
       await cache.addAll(PRECACHE);
-      await self.skipWaiting();
     })()
   );
+  // NOTE: no skipWaiting() here, deliberately.
+  //
+  // Activating immediately looks helpful and is not: clients.claim() then hands
+  // the ALREADY-LOADED page assets from the new build, so an old app.js can
+  // fetch a module whose shape has changed. The page ends up half one version
+  // and half another.
+  //
+  // Instead the new worker waits, the app notices it and offers a reload, and
+  // the swap happens all at once on a fresh page. If the user never accepts,
+  // the worker activates by itself once every tab is closed — so it still
+  // self-heals, just never mid-session.
+});
+
+/** The app asks for the swap once the user has agreed to reload. */
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
