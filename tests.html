@@ -1,0 +1,1832 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Huisbeheer — unit tests</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  /* The harness borrows the app's tokens so a broken theme shows up here too. */
+  body { display: block; padding: 24px; }
+  .t-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .t-summary { font-family: var(--font-mono); font-size: 15px; padding: 8px 14px; border-radius: var(--radius-sm); }
+  .t-summary.ok { background: var(--accent-soft); color: var(--accent); }
+  .t-summary.bad { background: var(--danger-soft); color: var(--danger); }
+  .t-group { margin: 20px 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .08em;
+             text-transform: uppercase; color: var(--text-tertiary); }
+  .t-row { display: grid; grid-template-columns: 58px 1fr; gap: 12px; align-items: start;
+           padding: 5px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .t-tag { font-family: var(--font-mono); font-weight: 700; font-size: 11px; padding: 2px 0; }
+  .t-row.pass .t-tag { color: var(--success); }
+  .t-row.fail { background: var(--danger-soft); }
+  .t-row.fail .t-tag { color: var(--danger); }
+  .t-detail { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary);
+              white-space: pre-wrap; word-break: break-word; margin-top: 3px; }
+</style>
+</head>
+<body>
+
+<div class="t-head">
+  <h1>Unit tests</h1>
+  <span class="t-summary" id="summary">running…</span>
+</div>
+<div id="results"></div>
+
+<script type="module">
+import {
+  escapeHtml, formatDate, formatDateTime, daysUntil, todayIso, formatBytes,
+  reminderTone, reminderLabel, isPreviewable, previewKind, replaceExtension,
+} from "./ui.js";
+import { renderMarkdown, markdownToPlain, safeUrl } from "./markdown.js";
+import {
+  toJsonExport, toCsv, csvCell, recordToRow, groupByType, buildPrintHtml,
+  exportFilename, CSV_COLUMNS, CSV_SEPARATOR,
+} from "./report.js";
+import { helpText } from "./help.js";
+import {
+  resolveRecord, mergeItemSets, isEmptyMerge,
+  mediaFilename, mediaIdFromFilename, referencedMediaIds, computeMediaActions,
+  planRestore, planPurge, MEDIA_SEPARATOR,
+} from "./merge.js";
+import {
+  makeId, makeRecord, hydrateRecord, TYPES, DEFAULT_TYPE, SORT_FIELDS,
+  normalizeSearchText, buildHaystack, stripTrackingParams, normalizeUrl,
+  queryItemSet, makeComparator,
+  computeStats, weekStart, bucketItemsByWeek, sortTagsByRecency,
+  reminderTypesInUse, computeBacklinks, computeLinkedIdSet,
+  appendActivity, ACTIVITY_CAP, ACTIVITY_DETAIL_MAX,
+  useDatabase, openDB, closeDB, putItem, putItems, getItem, getAllItems,
+  queryItems, getDeletedItems, softDeleteItem, clearItems,
+  putMedia, getMedia, deleteMedia, cloneMedia, getAllMediaIds,
+  getMeta, setMeta, deleteMeta, logActivity, getActivityLog, clearActivityLog,
+  getStats, getStorageEstimate,
+} from "./db.js";
+import { t, typeLabel, _dictKeys } from "./i18n.js";
+import { icon, typeIcon, ICON_NAMES } from "./icons.js";
+import { state, setLang } from "./state.js";
+import { VERSION, versionLine } from "./version.js";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Harness — no framework, no runner, no npm (BLUEPRINT §12)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const out = document.getElementById("results");
+let passed = 0;
+let failed = 0;
+
+function group(name) {
+  const el = document.createElement("div");
+  el.className = "t-group";
+  el.textContent = name;
+  out.append(el);
+}
+
+function record(ok, label, detail) {
+  ok ? passed++ : failed++;
+  const row = document.createElement("div");
+  row.className = `t-row ${ok ? "pass" : "fail"}`;
+  const tag = document.createElement("span");
+  tag.className = "t-tag";
+  tag.textContent = ok ? "PASS" : "FAIL";
+  const body = document.createElement("div");
+  body.textContent = label;
+  if (!ok && detail) {
+    const d = document.createElement("div");
+    d.className = "t-detail";
+    d.textContent = detail;
+    body.append(d);
+  }
+  row.append(tag, body);
+  out.append(row);
+}
+
+function assertEqual(actual, expected, label) {
+  const ok = Object.is(actual, expected);
+  record(ok, label, ok ? "" : `expected: ${JSON.stringify(expected)}\nactual:   ${JSON.stringify(actual)}`);
+}
+
+function assertDeepEqual(actual, expected, label) {
+  const a = JSON.stringify(actual);
+  const b = JSON.stringify(expected);
+  record(a === b, label, a === b ? "" : `expected: ${b}\nactual:   ${a}`);
+}
+
+function assertTrue(value, label, detail) {
+  record(!!value, label, value ? "" : detail || "expected a truthy value");
+}
+
+async function assertRejects(promise, label) {
+  try {
+    await promise;
+    record(false, label, "expected a rejection, but it resolved");
+  } catch {
+    record(true, label);
+  }
+}
+
+/** A deterministic record. Only what a test cares about is ever passed in. */
+function fx(over = {}) {
+  return makeRecord({
+    id: over.id || `id-${Math.random().toString(36).slice(2, 10)}`,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...over,
+  });
+}
+
+const ids = (r) => (r.results || r).map((i) => i.id);
+
+// ═══════════════════════════════════════════════════════════════════════════
+async function main() {
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ui.js — escaping
+// ═══════════════════════════════════════════════════════════════════════════
+group("ui.js · escapeHtml");
+
+assertEqual(escapeHtml("plain"), "plain", "leaves plain text alone");
+assertEqual(escapeHtml("<b>x</b>"), "&lt;b&gt;x&lt;/b&gt;", "escapes angle brackets");
+assertEqual(escapeHtml('a "b" c'), "a &quot;b&quot; c", "escapes double quotes (attribute break-out)");
+assertEqual(escapeHtml("it's"), "it&#39;s", "escapes single quotes");
+assertEqual(escapeHtml("a & b"), "a &amp; b", "escapes ampersand");
+assertEqual(escapeHtml("&lt;"), "&amp;lt;", "escapes the ampersand first, not twice");
+assertEqual(escapeHtml(null), "", "null becomes an empty string");
+assertEqual(escapeHtml(undefined), "", "undefined becomes an empty string");
+assertEqual(escapeHtml(0), "0", "zero survives (not treated as absent)");
+assertEqual(
+  escapeHtml('<img src=x onerror="alert(1)">'),
+  "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;",
+  "neutralises an onerror payload"
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ui.js — date helpers
+// ═══════════════════════════════════════════════════════════════════════════
+group("ui.js · daysUntil / todayIso");
+
+assertEqual(daysUntil("2026-08-04", "2026-08-04"), 0, "same day is 0");
+assertEqual(daysUntil("2026-08-11", "2026-08-04"), 7, "a week ahead is 7");
+assertEqual(daysUntil("2026-08-01", "2026-08-04"), -3, "overdue is negative");
+assertEqual(daysUntil("2027-01-01", "2026-12-31"), 1, "crosses a year boundary");
+assertEqual(daysUntil("2026-03-02", "2026-02-28"), 2, "crosses end of February");
+assertEqual(daysUntil("2028-03-01", "2028-02-28"), 2, "handles a leap day in between");
+assertEqual(daysUntil("2026-10-26", "2026-10-24"), 2, "unaffected by the DST changeover");
+assertEqual(daysUntil("2026-08-04T23:59:00Z", "2026-08-04T00:01:00Z"), 0,
+  "date-only comparison: a timestamp does not flip the day");
+assertEqual(daysUntil("", "2026-08-04"), null, "missing date returns null");
+assertEqual(daysUntil("2026-08-04", ""), null, "missing today returns null");
+assertEqual(daysUntil("not-a-date", "2026-08-04"), null, "malformed date returns null");
+
+assertEqual(todayIso(new Date(2026, 7, 4, 12, 0, 0)), "2026-08-04", "formats local date");
+assertEqual(todayIso(new Date(2026, 0, 9, 12, 0, 0)), "2026-01-09", "zero-pads month and day");
+assertEqual(
+  todayIso(new Date(2026, 11, 31, 23, 30, 0)),
+  "2026-12-31",
+  "late local evening stays on the local date, not tomorrow in UTC"
+);
+
+group("ui.js · formatDate / formatDateTime");
+
+assertEqual(formatDate(""), "", "empty input gives an empty string");
+assertEqual(formatDate(null), "", "null gives an empty string");
+assertEqual(formatDate("nonsense"), "", "unparseable input gives an empty string");
+assertTrue(formatDate("2026-08-04T10:00:00Z", "nl").includes("2026"), "nl date contains the year");
+assertTrue(formatDate("2026-08-04T10:00:00Z", "en").includes("2026"), "en date contains the year");
+assertTrue(
+  formatDate("2026-08-04T10:00:00Z", "nl") !== formatDate("2026-08-04T10:00:00Z", "en"),
+  "nl and en render differently"
+);
+assertEqual(formatDateTime(""), "", "empty datetime gives an empty string");
+assertEqual(formatDateTime("nonsense"), "", "unparseable datetime gives an empty string");
+assertTrue(/\d{2}:\d{2}/.test(formatDateTime("2026-08-04T10:07:00Z", "nl")), "datetime includes a clock time");
+assertTrue(
+  formatDate("2026-08-04T10:00:00Z", "zz") === formatDate("2026-08-04T10:00:00Z", "nl"),
+  "unknown language falls back to nl"
+);
+
+group("ui.js · formatBytes");
+
+assertEqual(formatBytes(0), "0 B", "zero bytes");
+assertEqual(formatBytes(512), "512 B", "under 1 kB stays in bytes");
+assertEqual(formatBytes(1024), "1 kB", "exactly 1 kB");
+assertEqual(formatBytes(1024 * 1024), "1 MB", "exactly 1 MB");
+assertEqual(formatBytes(1024 * 1024 * 1024), "1 GB", "exactly 1 GB");
+assertEqual(formatBytes(1024 ** 4), "1 TB", "exactly 1 TB");
+assertTrue(formatBytes(1024 ** 5).endsWith(" TB"), "stops climbing at TB, the largest unit");
+assertTrue(formatBytes(1536).endsWith(" kB"), "1536 bytes reports in kB");
+assertTrue(formatBytes(150 * 1024 * 1024).startsWith("150"), "large values round to a whole number");
+assertEqual(formatBytes(-1), "", "negative input gives an empty string");
+assertEqual(formatBytes(NaN), "", "NaN gives an empty string");
+assertEqual(formatBytes(Infinity), "", "Infinity gives an empty string");
+
+group("ui.js · previewKind (how a file is shown in the in-app viewer)");
+
+assertEqual(previewKind("application/pdf"), "pdf", "a PDF is framed");
+assertEqual(previewKind("image/jpeg"), "image", "a jpeg is an image");
+assertEqual(previewKind("image/png"), "image", "any image/* is an image");
+assertEqual(previewKind("image/svg+xml"), "image", "svg is shown via <img>, which cannot run its script");
+assertEqual(previewKind("text/plain"), "text", "plain text is shown as text");
+assertEqual(previewKind("text/csv"), "text", "csv is shown as text");
+assertEqual(previewKind("application/json"), "text", "json is shown as text");
+assertEqual(previewKind("application/xml"), "text", "xml is shown as text");
+assertEqual(previewKind("APPLICATION/PDF"), "pdf", "the check is case-insensitive");
+assertEqual(previewKind("text/plain; charset=utf-8"), "text", "a charset parameter is ignored");
+assertEqual(
+  previewKind("text/html"),
+  "text",
+  "html is shown as SOURCE, never framed — a blob: URL inherits our origin, " +
+    "so framing it would run the file's scripts against our own IndexedDB"
+);
+assertEqual(previewKind("application/xhtml+xml"), "text", "xhtml is shown as source too");
+assertEqual(
+  previewKind("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+  "none",
+  "a spreadsheet cannot be shown and must be downloaded"
+);
+assertEqual(previewKind("application/zip"), "none", "an archive cannot be shown");
+assertEqual(previewKind("application/msword"), "none", "a Word document cannot be shown");
+assertEqual(previewKind(""), "none", "an unknown type cannot be shown");
+assertEqual(previewKind(null), "none", "a missing type cannot be shown");
+
+assertEqual(isPreviewable("application/pdf"), true, "isPreviewable agrees for a PDF");
+assertEqual(isPreviewable("application/zip"), false, "isPreviewable agrees for an archive");
+assertEqual(isPreviewable("text/html"), true, "html is previewable — as source");
+
+group("ui.js · replaceExtension");
+
+assertEqual(replaceExtension("photo.png", "jpg"), "photo.jpg", "swaps the extension");
+assertEqual(replaceExtension("photo.PNG", "jpg"), "photo.jpg", "swaps an upper-case extension");
+assertEqual(
+  replaceExtension("Contract 2026.v2.png", "jpg"),
+  "Contract 2026.v2.jpg",
+  "only the LAST dot is the extension"
+);
+assertEqual(replaceExtension("noextension", "jpg"), "noextension.jpg", "appends when there is none");
+assertEqual(replaceExtension(".hidden", "jpg"), ".hidden.jpg", "a leading dot is not an extension");
+assertEqual(replaceExtension("", "jpg"), "bestand.jpg", "an empty name still gets a usable filename");
+assertEqual(replaceExtension(null, "jpg"), "bestand.jpg", "a null name still gets a usable filename");
+
+group("ui.js · reminderTone / reminderLabel");
+
+assertEqual(reminderTone(-1), "overdue", "yesterday is overdue");
+assertEqual(reminderTone(-100), "overdue", "long past is overdue");
+assertEqual(reminderTone(0), "today", "zero days is today");
+assertEqual(reminderTone(1), "soon", "tomorrow is soon");
+assertEqual(reminderTone(7), "soon", "exactly a week away is still soon");
+assertEqual(reminderTone(8), "later", "eight days away is later");
+assertEqual(reminderTone(null), "none", "no reminder has no tone");
+assertEqual(reminderTone(undefined), "none", "undefined has no tone");
+assertEqual(reminderLabel(null), "", "no reminder has no label");
+{
+  const before = state.lang;
+  setLang("en");
+  assertEqual(reminderLabel(0), "Today", "today reads as Today");
+  assertEqual(reminderLabel(-1), "1 day overdue", "singular overdue has its own form");
+  assertEqual(reminderLabel(-3), "3 days overdue", "plural overdue interpolates the count");
+  assertEqual(reminderLabel(1), "In 1 day", "singular future has its own form");
+  assertEqual(reminderLabel(5), "In 5 days", "plural future interpolates the count");
+  setLang("nl");
+  assertEqual(reminderLabel(0), "Vandaag", "the label follows the language");
+  setLang(before);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// markdown.js — PURE, and the XSS surface (§12)
+// ═══════════════════════════════════════════════════════════════════════════
+group("markdown.js · safeUrl");
+
+assertEqual(safeUrl("https://example.com"), "https://example.com", "https is allowed");
+assertEqual(safeUrl("http://example.com"), "http://example.com", "http is allowed");
+assertEqual(safeUrl("mailto:a@b.com"), "mailto:a@b.com", "mailto is allowed");
+assertEqual(safeUrl("tel:+3212345"), "tel:+3212345", "tel is allowed");
+assertEqual(safeUrl("www.example.com"), "https://www.example.com", "a bare www gets https");
+assertEqual(safeUrl("#anchor"), "#anchor", "a fragment is allowed");
+assertEqual(safeUrl("/local/path"), "/local/path", "a relative path is allowed");
+assertEqual(safeUrl("javascript:alert(1)"), null, "javascript: is refused");
+assertEqual(safeUrl("JaVaScRiPt:alert(1)"), null, "javascript: is refused whatever the case");
+assertEqual(safeUrl("java\tscript:alert(1)"), null, "a tab inside the scheme does not smuggle it through");
+assertEqual(safeUrl("java\nscript:alert(1)"), null, "a newline inside the scheme does not either");
+assertEqual(safeUrl(" javascript:alert(1)"), null, "leading whitespace does not either");
+assertEqual(safeUrl("data:text/html,<script>"), null, "data: is refused");
+assertEqual(safeUrl("vbscript:msgbox"), null, "vbscript: is refused");
+assertEqual(safeUrl("file:///etc/passwd"), null, "file: is refused");
+assertEqual(safeUrl("ftp://example.com"), null, "an unknown scheme is refused");
+assertEqual(safeUrl(""), null, "empty is refused");
+assertEqual(safeUrl(null), null, "null is refused");
+
+group("markdown.js · renderMarkdown — XSS");
+
+assertEqual(
+  renderMarkdown("<script>alert(1)<\/script>"),
+  "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>",
+  "a script tag is escaped, never emitted"
+);
+assertTrue(
+  !renderMarkdown('<img src=x onerror="alert(1)">').includes("<img"),
+  "an img/onerror payload cannot become a tag"
+);
+assertTrue(
+  !renderMarkdown("[click](javascript:alert(1))").includes("<a "),
+  "a javascript: link never becomes an anchor"
+);
+assertTrue(
+  renderMarkdown("[click](javascript:alert(1))").includes("[click]"),
+  "…it is left as visible plain text instead"
+);
+assertTrue(
+  !renderMarkdown("[x](data:text/html;base64,PHNjcmlwdD4=)").includes("<a "),
+  "a data: link never becomes an anchor"
+);
+{
+  // Attribute break-out: the quote is already &quot; before it reaches href.
+  const html = renderMarkdown('[x](https://a.example" onmouseover="alert(1))');
+  assertTrue(!html.includes('onmouseover="alert'), "a quote in a URL cannot break out of href");
+  assertTrue(!/href="[^"]*"\s+on/i.test(html), "no event handler attribute is ever produced");
+}
+assertTrue(
+  !renderMarkdown("`<script>alert(1)<\/script>`").includes("<script>"),
+  "html inside a code span is escaped too"
+);
+assertTrue(
+  !renderMarkdown("```\n<script>alert(1)<\/script>\n```").includes("<script>alert"),
+  "html inside a fenced block is escaped too"
+);
+assertTrue(
+  !renderMarkdown("# <img src=x onerror=alert(1)>").includes("<img"),
+  "a heading does not smuggle html through"
+);
+assertTrue(
+  !renderMarkdown("> <script>alert(1)<\/script>").includes("<script>alert"),
+  "a blockquote does not smuggle html through"
+);
+assertTrue(
+  !renderMarkdown("- <script>alert(1)<\/script>").includes("<script>alert"),
+  "a list item does not smuggle html through"
+);
+assertTrue(
+  renderMarkdown("a & b < c").includes("&amp;") && renderMarkdown("a & b < c").includes("&lt;"),
+  "ampersands and angle brackets are escaped in plain text"
+);
+
+group("markdown.js · renderMarkdown — formatting");
+
+assertEqual(renderMarkdown(""), "", "empty source renders nothing");
+assertEqual(renderMarkdown(null), "", "null source renders nothing");
+assertEqual(renderMarkdown("   \n  \n"), "", "whitespace only renders nothing");
+assertEqual(renderMarkdown("Hello"), "<p>Hello</p>", "a bare line is a paragraph");
+assertEqual(renderMarkdown("# Title"), "<h1>Title</h1>", "one hash is h1");
+assertEqual(renderMarkdown("### Sub"), "<h3>Sub</h3>", "three hashes is h3");
+assertEqual(renderMarkdown("#NoSpace"), "<p>#NoSpace</p>", "a hash without a space is not a heading");
+assertEqual(renderMarkdown("**bold**"), "<p><strong>bold</strong></p>", "double star is strong");
+assertEqual(renderMarkdown("*italic*"), "<p><em>italic</em></p>", "single star is em");
+assertEqual(renderMarkdown("~~gone~~"), "<p><del>gone</del></p>", "double tilde is del");
+assertEqual(renderMarkdown("`code`"), "<p><code>code</code></p>", "backticks are code");
+assertEqual(
+  renderMarkdown("`**not bold**`"),
+  "<p><code>**not bold**</code></p>",
+  "emphasis inside a code span is left alone"
+);
+assertEqual(renderMarkdown("---"), "<hr>", "three dashes is a rule");
+assertEqual(
+  renderMarkdown("- one\n- two"),
+  "<ul><li>one</li><li>two</li></ul>",
+  "dashes make an unordered list"
+);
+assertEqual(
+  renderMarkdown("1. one\n2. two"),
+  "<ol><li>one</li><li>two</li></ol>",
+  "numbers make an ordered list"
+);
+assertEqual(renderMarkdown("> quoted"), "<blockquote>quoted</blockquote>", "a chevron is a blockquote");
+assertEqual(
+  renderMarkdown("&gt; quoted"),
+  "<p>&amp;gt; quoted</p>",
+  "a literal &gt; typed by the user stays literal and does NOT become a blockquote"
+);
+assertEqual(
+  renderMarkdown("```\nx = 1\n```"),
+  "<pre><code>x = 1</code></pre>",
+  "a fence is a code block"
+);
+assertEqual(
+  renderMarkdown("line one\nline two"),
+  "<p>line one<br>line two</p>",
+  "a single newline becomes <br> inside a paragraph (§13.12)"
+);
+assertEqual(
+  renderMarkdown("para one\n\npara two"),
+  "<p>para one</p>\n<p>para two</p>",
+  "a blank line separates paragraphs"
+);
+assertEqual(
+  renderMarkdown("text\n# Heading"),
+  "<p>text</p>\n<h1>Heading</h1>",
+  "a heading ends the paragraph above it without a blank line"
+);
+{
+  const html = renderMarkdown("[ENGIE](https://engie.be)");
+  assertTrue(html.includes('href="https://engie.be"'), "an explicit link becomes an anchor");
+  assertTrue(html.includes('rel="noopener noreferrer"'), "links carry rel=noopener noreferrer");
+  assertTrue(html.includes('target="_blank"'), "links open in a new tab");
+  assertTrue(html.includes(">ENGIE<"), "the label is used as the link text");
+}
+{
+  const html = renderMarkdown("See https://example.com/x for details");
+  assertTrue(html.includes('href="https://example.com/x"'), "a bare URL is autolinked");
+  assertTrue(html.includes("See "), "the surrounding text survives autolinking");
+}
+assertEqual(
+  (renderMarkdown("[a](https://example.com)").match(/<a /g) || []).length,
+  1,
+  "an explicit link is not autolinked a second time inside its own href"
+);
+assertTrue(
+  renderMarkdown("Visit https://example.com.").includes('href="https://example.com"'),
+  "a trailing sentence full stop is left out of the URL"
+);
+assertEqual(
+  renderMarkdown("Code van de kluis: `4821`"),
+  "<p>Code van de kluis: <code>4821</code></p>",
+  "a realistic line from the legacy data renders correctly"
+);
+assertEqual(renderMarkdown("```\nunclosed"), "<pre><code>unclosed</code></pre>",
+  "an unclosed fence does not run off the end");
+
+group("markdown.js · markdownToPlain");
+
+assertEqual(markdownToPlain(""), "", "empty gives empty");
+assertEqual(markdownToPlain(null), "", "null gives empty");
+assertEqual(markdownToPlain("# Title"), "Title", "strips heading markers");
+assertEqual(markdownToPlain("**bold** and *italic*"), "bold and italic", "strips emphasis markers");
+assertEqual(markdownToPlain("- one\n- two"), "one two", "flattens a list onto one line");
+assertEqual(markdownToPlain("[ENGIE](https://engie.be)"), "ENGIE", "keeps the link label, drops the URL");
+assertEqual(markdownToPlain("`code`"), "code", "strips code markers");
+assertEqual(markdownToPlain("a\n\n\nb"), "a b", "collapses blank lines");
+assertEqual(markdownToPlain("> quoted"), "quoted", "strips the quote marker");
+{
+  const long = markdownToPlain("x".repeat(300), 50);
+  assertEqual(long.length, 50, "respects the length limit");
+  assertTrue(long.endsWith("…"), "…and marks the truncation");
+}
+assertEqual(markdownToPlain("short", 50), "short", "text under the limit is untouched");
+assertTrue(
+  !markdownToPlain("```\nsecret\n```").includes("secret"),
+  "a fenced block is dropped from the preview rather than dumped raw"
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// merge.js — the pure conflict resolution the whole of sync rests on (§7, §12)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** A record at a given time, alive or tombstoned. */
+const rec = (id, updatedAt, over = {}) =>
+  fx({ id, updatedAt, createdAt: "2026-01-01T00:00:00.000Z", ...over });
+const dead = (id, updatedAt, deletedAt = updatedAt, over = {}) =>
+  rec(id, updatedAt, { deletedAt, ...over });
+
+group("merge.js · resolveRecord — tombstones");
+
+{
+  const live = rec("x", "2026-08-04T12:00:00.000Z", { title: "Nieuw" });
+  const tomb = dead("x", "2026-01-01T00:00:00.000Z");
+  assertEqual(
+    resolveRecord(live, tomb).deletedAt !== null,
+    true,
+    "a tombstone beats a live record even when the live one is MUCH newer"
+  );
+  assertEqual(
+    resolveRecord(tomb, live).deletedAt !== null,
+    true,
+    "…and in the other argument order too"
+  );
+  assertEqual(resolveRecord(live, tomb), tomb, "the tombstone object itself is returned");
+}
+{
+  const older = dead("x", "2026-01-01T00:00:00.000Z");
+  const newer = dead("x", "2026-06-01T00:00:00.000Z");
+  assertEqual(resolveRecord(older, newer), newer, "between two tombstones the newer wins");
+  assertEqual(resolveRecord(newer, older), newer, "…whichever way round they are passed");
+}
+{
+  const a = rec("x", "2026-01-01T00:00:00.000Z");
+  const b = rec("x", "2026-06-01T00:00:00.000Z");
+  assertEqual(resolveRecord(a, b), b, "between two live records the newer wins");
+  assertEqual(resolveRecord(b, a), b, "…whichever way round");
+}
+
+group("merge.js · resolveRecord — edges");
+
+assertEqual(resolveRecord(null, null), null, "two nothings resolve to nothing");
+{
+  const only = rec("x", "2026-01-01T00:00:00.000Z");
+  assertEqual(resolveRecord(null, only), only, "a missing local side yields the remote");
+  assertEqual(resolveRecord(only, null), only, "a missing remote side yields the local");
+}
+{
+  const same = "2026-05-05T00:00:00.000Z";
+  const a = rec("x", same, { title: "lokaal" });
+  const b = rec("x", same, { title: "extern" });
+  assertEqual(
+    resolveRecord(a, b).title,
+    "lokaal",
+    "an exact tie resolves to the FIRST argument — mergeItemSets passes local " +
+      "first, so a tie is a no-op instead of a pointless write"
+  );
+}
+{
+  const same = "2026-05-05T00:00:00.000Z";
+  const plain = dead("x", same);
+  const purged = dead("x", same, same, { purgedAt: same });
+  assertEqual(resolveRecord(plain, purged), purged, "on a tie, purged beats a plain tombstone");
+  assertEqual(resolveRecord(purged, plain), purged, "…whichever way round");
+}
+{
+  // Built literally, not through makeRecord — which would fill the timestamp
+  // in and make the case impossible to express.
+  const a = { id: "x", updatedAt: "", deletedAt: null };
+  const b = { id: "x", updatedAt: "2026-01-01T00:00:00.000Z", deletedAt: null };
+  assertEqual(resolveRecord(a, b), b, "a record with no timestamp loses to one that has one");
+  assertEqual(resolveRecord(b, a), b, "…whichever way round it is passed");
+  const c = { id: "x", deletedAt: null };
+  assertEqual(resolveRecord(c, b), b, "a missing updatedAt behaves the same as an empty one");
+}
+
+group("merge.js · mergeItemSets — first sync and fresh device");
+
+{
+  // First sync ever: Drive is empty, everything local survives.
+  const local = [rec("a", "2026-01-01T00:00:00.000Z"), rec("b", "2026-01-02T00:00:00.000Z")];
+  const { merged, stats } = mergeItemSets(local, []);
+  assertEqual(merged.length, 2, "an empty remote keeps every local record");
+  assertDeepEqual(stats, { added: 0, updated: 0, deleted: 0 }, "…and reports no changes");
+}
+{
+  // Fresh device: nothing local, everything comes down.
+  const remote = [rec("a", "2026-01-01T00:00:00.000Z"), rec("b", "2026-01-02T00:00:00.000Z")];
+  const { merged, stats } = mergeItemSets([], remote);
+  assertEqual(merged.length, 2, "a fresh device takes the whole remote set");
+  assertEqual(stats.added, 2, "…and counts them all as added");
+}
+assertEqual(mergeItemSets([], []).merged.length, 0, "two empty sets merge to nothing");
+assertEqual(mergeItemSets(null, null).merged.length, 0, "null sets do not throw");
+{
+  const { merged } = mergeItemSets([null, rec("a", "2026-01-01T00:00:00.000Z")], [{ title: "no id" }]);
+  assertDeepEqual(merged.map((r) => r.id), ["a"], "entries with no id are skipped on both sides");
+}
+
+group("merge.js · mergeItemSets — incremental");
+
+{
+  const local = [
+    rec("keep", "2026-01-01T00:00:00.000Z"),
+    rec("mine-newer", "2026-06-01T00:00:00.000Z", { title: "lokaal nieuw" }),
+    rec("theirs-newer", "2026-01-01T00:00:00.000Z", { title: "lokaal oud" }),
+  ];
+  const remote = [
+    rec("mine-newer", "2026-01-01T00:00:00.000Z", { title: "extern oud" }),
+    rec("theirs-newer", "2026-06-01T00:00:00.000Z", { title: "extern nieuw" }),
+    rec("new-to-us", "2026-05-01T00:00:00.000Z"),
+  ];
+  const { merged, stats } = mergeItemSets(local, remote);
+  const byId = Object.fromEntries(merged.map((r) => [r.id, r]));
+
+  assertEqual(merged.length, 4, "the union of both sets survives");
+  assertEqual(byId["keep"].title, "", "a record the remote has never seen is untouched");
+  assertEqual(byId["mine-newer"].title, "lokaal nieuw", "our newer edit wins");
+  assertEqual(byId["theirs-newer"].title, "extern nieuw", "their newer edit wins");
+  assertTrue(!!byId["new-to-us"], "a record only they have arrives");
+  assertEqual(stats.added, 1, "one added");
+  assertEqual(stats.updated, 1, "one updated (only the record we actually changed)");
+  assertEqual(stats.deleted, 0, "nothing deleted");
+}
+{
+  // A delete made elsewhere reaches us.
+  const local = [rec("x", "2026-06-01T00:00:00.000Z", { title: "nog hier" })];
+  const remote = [dead("x", "2026-01-01T00:00:00.000Z")];
+  const { merged, stats } = mergeItemSets(local, remote);
+  assertTrue(!!merged[0].deletedAt, "the tombstone wins over our newer live copy");
+  assertEqual(stats.deleted, 1, "…and is reported as a deletion");
+  assertEqual(stats.updated, 0, "a deletion is not double-counted as an update");
+}
+{
+  // A tombstone for something we never had is not a user-visible deletion.
+  const { stats } = mergeItemSets([], [dead("gone", "2026-01-01T00:00:00.000Z")]);
+  assertDeepEqual(stats, { added: 0, updated: 0, deleted: 0 },
+    "a tombstone for a record we never had counts as nothing");
+}
+{
+  // Idempotence: merging the same sets twice changes nothing the second time.
+  const local = [rec("a", "2026-01-01T00:00:00.000Z"), dead("b", "2026-02-01T00:00:00.000Z")];
+  const remote = [rec("a", "2026-03-01T00:00:00.000Z"), rec("c", "2026-01-01T00:00:00.000Z")];
+  const first = mergeItemSets(local, remote);
+  const second = mergeItemSets(first.merged, remote);
+  assertDeepEqual(second.stats, { added: 0, updated: 0, deleted: 0 },
+    "re-merging an already-merged set is a no-op — sync must converge, not oscillate");
+  assertEqual(second.merged.length, first.merged.length, "…and produces the same set");
+}
+
+group("merge.js · mergeItemSets — resurrection prevention (§13.6)");
+
+{
+  // The scenario the whole tombstone design exists for: a stale device that
+  // never saw the delete comes back online carrying its old live copy.
+  const drive = [dead("x", "2026-05-01T00:00:00.000Z")];
+  const staleDevice = [rec("x", "2026-04-01T00:00:00.000Z", { title: "oude kopie" })];
+
+  const atStaleDevice = mergeItemSets(staleDevice, drive);
+  assertTrue(!!atStaleDevice.merged[0].deletedAt, "the stale device learns of the delete");
+
+  // …and its push back to Drive must not undo it.
+  const backAtDrive = mergeItemSets(drive, atStaleDevice.merged);
+  assertTrue(!!backAtDrive.merged[0].deletedAt, "pushing back does NOT resurrect the record");
+  assertDeepEqual(backAtDrive.stats, { added: 0, updated: 0, deleted: 0 },
+    "…and Drive sees no change at all");
+}
+{
+  // A restored record carries a NEW id, so the old tombstone cannot kill it.
+  const tomb = dead("old", "2026-05-01T00:00:00.000Z");
+  const { revived, tombstone } = planRestore(tomb, "brand-new", {}, "2026-06-01T00:00:00.000Z");
+  const { merged } = mergeItemSets([tombstone, revived], [tomb]);
+  const byId = Object.fromEntries(merged.map((r) => [r.id, r]));
+  assertEqual(byId["brand-new"].deletedAt, null, "the revived copy survives a sync with the old tombstone");
+  assertTrue(!!byId["old"].deletedAt, "…and the original tombstone is still a tombstone");
+}
+assertEqual(isEmptyMerge({ added: 0, updated: 0, deleted: 0 }), true, "an all-zero merge is empty");
+assertEqual(isEmptyMerge({ added: 1, updated: 0, deleted: 0 }), false, "one addition is not empty");
+assertEqual(isEmptyMerge(null), true, "no stats at all counts as empty");
+
+group("merge.js · media filenames");
+
+assertEqual(mediaFilename("abc", "doc.pdf"), `abc${MEDIA_SEPARATOR}doc.pdf`, "id and name are joined");
+assertEqual(mediaIdFromFilename("abc__doc.pdf"), "abc", "the id is read back");
+assertEqual(
+  mediaIdFromFilename("abc__my__report.pdf"),
+  "abc",
+  "splitting uses the FIRST separator — a filename may contain __ itself"
+);
+assertEqual(mediaIdFromFilename("no-separator.pdf"), null, "a name with no separator has no id");
+assertEqual(mediaIdFromFilename("__leading.pdf"), null, "a name starting with the separator has no id");
+assertEqual(mediaIdFromFilename(""), null, "an empty name has no id");
+assertEqual(mediaIdFromFilename(null), null, "a null name has no id");
+{
+  const id = "0f8c3a1e-2b4d-4f6a-9c8e-1d2f3a4b5c6d";
+  assertEqual(mediaIdFromFilename(mediaFilename(id, "Contract 2026.pdf")), id, "a real uuid round-trips");
+}
+
+group("merge.js · referencedMediaIds");
+
+{
+  const records = [
+    rec("a", "2026-01-01T00:00:00.000Z", { attachments: [{ mediaId: "m1", filename: "a.pdf" }] }),
+    dead("b", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", {
+      attachments: [{ mediaId: "m2", filename: "b.pdf" }],
+    }),
+    rec("c", "2026-01-01T00:00:00.000Z", { attachments: [] }),
+  ];
+  const ids = referencedMediaIds(records);
+  assertTrue(ids.has("m1"), "a live record's attachment is referenced");
+  assertTrue(!ids.has("m2"), "a TOMBSTONE's attachment is not referenced — that is what makes it collectable");
+  assertEqual(ids.size, 1, "nothing else is referenced");
+  assertEqual(referencedMediaIds([]).size, 0, "no records means no references");
+  assertEqual(referencedMediaIds(null).size, 0, "null does not throw");
+}
+
+group("merge.js · computeMediaActions");
+
+{
+  const merged = [
+    rec("a", "2026-01-01T00:00:00.000Z", { attachments: [{ mediaId: "here-only", filename: "a.pdf" }] }),
+    rec("b", "2026-01-01T00:00:00.000Z", { attachments: [{ mediaId: "there-only", filename: "b.pdf" }] }),
+    rec("c", "2026-01-01T00:00:00.000Z", { attachments: [{ mediaId: "both", filename: "c.pdf" }] }),
+  ];
+  const actions = computeMediaActions(
+    merged,
+    ["here-only", "both", "local-orphan"],
+    ["there-only__b.pdf", "both__c.pdf", "remote-orphan__old.pdf"]
+  );
+  assertDeepEqual(actions.toUpload, ["here-only"], "a referenced blob we alone hold is uploaded");
+  assertDeepEqual(actions.toDownload, ["there-only"], "a referenced blob only Drive holds is downloaded");
+  assertDeepEqual(actions.toDeleteLocal, ["local-orphan"], "an unreferenced local blob is collected");
+  assertDeepEqual(actions.toDeleteRemoteNames, ["remote-orphan__old.pdf"],
+    "an unreferenced Drive file is collected, matched by its id PREFIX");
+  assertTrue(!actions.toUpload.includes("both"), "a blob both sides hold is not re-uploaded");
+  assertTrue(!actions.toDownload.includes("both"), "…nor re-downloaded");
+}
+{
+  // §13.7, the silent storage leak: the device that deleted the record has
+  // ALREADY purged its local blob, so any rule of the form "delete remotely
+  // only if we still have it locally" never fires and Drive keeps the file
+  // forever.
+  const merged = [dead("a", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", {
+    attachments: [{ mediaId: "m1", filename: "gone.pdf" }],
+  })];
+  const actions = computeMediaActions(merged, [], ["m1__gone.pdf"]);
+  assertDeepEqual(
+    actions.toDeleteRemoteNames,
+    ["m1__gone.pdf"],
+    "the Drive copy is deleted even though the local blob is already gone"
+  );
+  assertDeepEqual(actions.toDownload, [], "a tombstoned record's blob is never downloaded back");
+}
+{
+  // An interrupted sync can leave two Drive files for one id.
+  const actions = computeMediaActions([], [], ["dup__one.pdf", "dup__two.pdf"]);
+  assertDeepEqual(actions.toDeleteRemoteNames, ["dup__one.pdf", "dup__two.pdf"],
+    "every duplicate for an unreferenced id is cleaned up, not just the first");
+}
+{
+  const actions = computeMediaActions([], [], ["strayfile.pdf"]);
+  assertDeepEqual(actions.toDeleteRemoteNames, [],
+    "a Drive file with no id prefix is left alone — it is not ours to delete");
+}
+{
+  const actions = computeMediaActions(null, null, null);
+  assertDeepEqual(actions.toUpload, [], "null inputs do not throw");
+  assertDeepEqual(actions.toDeleteRemoteNames, [], "…and produce no destructive work");
+}
+
+group("merge.js · planRestore (§8.5)");
+
+{
+  const tomb = dead("old-id", "2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z", {
+    title: "Terug", tags: ["x"],
+    attachments: [{ mediaId: "old-media", filename: "a.pdf" }],
+  });
+  const { revived, tombstone } = planRestore(tomb, "new-id", { "old-media": "new-media" }, "2026-06-01T00:00:00.000Z");
+
+  assertEqual(revived.id, "new-id", "the revived record takes a NEW id (§13.6)");
+  assertEqual(revived.deletedAt, null, "…and is alive");
+  assertEqual(revived.restoredAt, null, "…and is not itself marked restored");
+  assertEqual(revived.title, "Terug", "…and keeps its content");
+  assertEqual(revived.createdAt, tomb.createdAt, "…and its original creation date");
+  assertEqual(revived.updatedAt, "2026-06-01T00:00:00.000Z", "…with a fresh updatedAt so it wins the next merge");
+  assertEqual(revived.attachments[0].mediaId, "new-media",
+    "attachments point at the CLONED blob, so two records never share one");
+
+  assertEqual(tombstone.id, "old-id", "the original tombstone keeps its id");
+  assertTrue(!!tombstone.deletedAt, "…and stays a tombstone, so the delete keeps propagating");
+  assertEqual(tombstone.restoredAt, "2026-06-01T00:00:00.000Z",
+    "…marked restored so it leaves the trash and cannot be restored twice");
+}
+{
+  const tomb = dead("old", "2026-05-01T00:00:00.000Z");
+  const { revived } = planRestore(tomb, "new", {}, "2026-06-01T00:00:00.000Z");
+  assertDeepEqual(revived.attachments, [], "a record with no attachments restores cleanly");
+}
+
+group("merge.js · planPurge (delete forever, §8.5)");
+
+{
+  const tomb = dead("x", "2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z", {
+    title: "Geheim", body: "code 1234", tags: ["a"], comment: "c",
+    links: [{ id: "1", label: "l", url: "https://x.example" }],
+    attachments: [{ mediaId: "m", filename: "f.pdf" }],
+    linkedIds: ["y"], pinned: true, reminderAt: "2026-09-01",
+  });
+  const purged = planPurge(tomb, "2026-07-01T00:00:00.000Z");
+
+  assertEqual(purged.id, "x", "the id is KEPT — a hard delete cannot propagate");
+  assertEqual(purged.title, "", "the title is wiped");
+  assertEqual(purged.body, "", "the body is wiped");
+  assertEqual(purged.comment, "", "the comment is wiped");
+  assertDeepEqual(purged.tags, [], "tags are wiped");
+  assertDeepEqual(purged.links, [], "links are wiped");
+  assertDeepEqual(purged.attachments, [], "attachments are wiped, so their blobs become collectable");
+  assertDeepEqual(purged.linkedIds, [], "links to other records are wiped");
+  assertEqual(purged.pinned, false, "pinned is cleared");
+  assertEqual(purged.reminderAt, null, "the reminder is cleared");
+  assertEqual(purged.purgedAt, "2026-07-01T00:00:00.000Z", "purgedAt is stamped");
+  assertTrue(!!purged.deletedAt, "it is still a tombstone, so the deletion keeps being enforced");
+  assertEqual(purged.createdAt, tomb.createdAt, "the creation date survives for ordering");
+}
+{
+  // A purged record must beat the pre-purge copy still sitting on Drive.
+  const tomb = dead("x", "2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z", { title: "Geheim" });
+  const purged = planPurge(tomb, "2026-07-01T00:00:00.000Z");
+  const { merged } = mergeItemSets([purged], [tomb]);
+  assertEqual(merged[0].title, "", "the purge wins, so the wiped content does not come back");
+  assertEqual(merged[0].purgedAt, "2026-07-01T00:00:00.000Z", "…and purgedAt survives the merge");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// report.js — export and print builders (§8.6, §8.7)
+// ═══════════════════════════════════════════════════════════════════════════
+group("report.js · csvCell");
+
+assertEqual(csvCell("plain"), "plain", "a plain value needs no quoting");
+assertEqual(csvCell(""), "", "empty stays empty");
+assertEqual(csvCell(null), "", "null becomes empty");
+assertEqual(csvCell(0), "0", "zero survives");
+assertEqual(csvCell("a;b"), '"a;b"', "the separator forces quoting");
+assertEqual(csvCell("a,b"), '"a,b"', "a comma forces quoting too, for other tools");
+assertEqual(csvCell('say "hi"'), '"say ""hi"""', "inner quotes are doubled");
+assertEqual(csvCell("line1\nline2"), '"line1\nline2"', "a newline forces quoting");
+assertEqual(
+  csvCell("=1+1"),
+  "'=1+1",
+  "a leading = is neutralised — a spreadsheet would treat it as a FORMULA"
+);
+assertEqual(csvCell("+44 123"), "'+44 123", "a leading + is neutralised (phone numbers hit this)");
+assertEqual(csvCell("-5"), "'-5", "a leading - is neutralised");
+assertEqual(csvCell("@handle"), "'@handle", "a leading @ is neutralised");
+assertEqual(
+  csvCell('=HYPERLINK("http://evil","click")'),
+  '"\'=HYPERLINK(""http://evil"",""click"")"',
+  "a formula-injection payload is both neutralised and quoted"
+);
+assertEqual(csvCell("mid=dle"), "mid=dle", "an = that is not leading is left alone");
+
+group("report.js · toCsv");
+
+{
+  const stub = (key) => key;
+  const records = [
+    fx({ id: "a", type: "note", title: "Alarm", tags: ["code", "veiligheid"],
+         reminderAt: "2026-09-01", reminderType: "Controle", pinned: true,
+         links: [{ id: "1", label: "Portaal", url: "https://a.example" }],
+         attachments: [{ mediaId: "m", filename: "doc.pdf" }] }),
+    fx({ id: "b", type: "warranty", title: "Ketel" }),
+    fx({ id: "z", title: "Weg", deletedAt: "2026-01-01T00:00:00.000Z" }),
+  ];
+  const csv = toCsv(records, { t: stub, lang: "nl" });
+  const lines = csv.trim().split("\r\n");
+
+  assertEqual(lines.length, 3, "a header plus one line per LIVE record");
+  assertTrue(!csv.includes("Weg"), "tombstones are excluded from the CSV");
+  assertEqual(lines[0].split(CSV_SEPARATOR).length, CSV_COLUMNS.length, "the header has every column");
+  assertTrue(lines[0].startsWith("csv.type"), "headers come from the dictionary");
+  assertTrue(lines[1].includes("Alarm"), "the title is present");
+  assertTrue(lines[1].includes("code, veiligheid"), "tags are joined readably");
+  assertTrue(lines[1].includes("https://a.example"), "the link URL is present");
+  assertTrue(lines[1].includes("doc.pdf"), "the attachment filename is present");
+  assertTrue(csv.endsWith("\r\n"), "the file ends with a newline so no row is dropped");
+}
+assertTrue(toCsv([], { t: (k) => k }).split("\r\n")[0].length > 0, "an empty set still yields a header");
+assertTrue(toCsv(null, { t: (k) => k }).length > 0, "a null set does not throw");
+{
+  const row = recordToRow(fx({ type: "note", title: "X", pinned: false }), { t: (k) => k });
+  assertEqual(row.pinned, "", "not pinned is an empty cell, not 'false'");
+  assertEqual(recordToRow(fx({ pinned: true }), { t: (k) => k }).pinned, "1", "pinned is 1");
+}
+
+group("report.js · toJsonExport");
+
+{
+  const records = [fx({ id: "a" }), fx({ id: "z", deletedAt: "2026-01-01T00:00:00.000Z" })];
+  const payload = toJsonExport(records, { build: 9, exportedAt: "2026-08-04T10:00:00.000Z" });
+  assertEqual(payload.app, "huisbeheer", "the payload is identifiable");
+  assertEqual(payload.format, 1, "the format is versioned");
+  assertEqual(payload.build, 9, "the build is recorded");
+  assertEqual(payload.exportedAt, "2026-08-04T10:00:00.000Z", "the timestamp is recorded");
+  assertEqual(payload.count, 2, "the count covers everything exported");
+  assertEqual(payload.items.length, 2,
+    "tombstones ARE included — a backup that dropped them would resurrect every deletion on restore");
+  assertTrue(payload.items !== records, "the items array is copied, not aliased");
+}
+assertEqual(toJsonExport([]).count, 0, "an empty export is still well-formed");
+assertEqual(toJsonExport(null).items.length, 0, "a null set does not throw");
+
+group("report.js · groupByType");
+
+{
+  const records = [
+    fx({ id: "1", type: "note", title: "Zebra" }),
+    fx({ id: "2", type: "warranty", title: "Boiler" }),
+    fx({ id: "3", type: "note", title: "alpha" }),
+    fx({ id: "4", type: "note", title: "Item 10" }),
+    fx({ id: "5", type: "note", title: "Item 2" }),
+    fx({ id: "6", type: "note", title: "Gone", deletedAt: "2026-01-01T00:00:00.000Z" }),
+  ];
+  const groups = groupByType(records, TYPES);
+  assertDeepEqual(groups.map((g) => g.type), ["note", "warranty"], "only types in use appear, in canonical order");
+  assertDeepEqual(
+    groups[0].records.map((r) => r.title),
+    ["alpha", "Item 2", "Item 10", "Zebra"],
+    "each group sorts by title, case-insensitively and naturally"
+  );
+  assertTrue(!groups[0].records.some((r) => r.title === "Gone"), "tombstones are excluded");
+  assertDeepEqual(groupByType([], TYPES), [], "no records means no groups");
+  assertDeepEqual(groupByType(null, TYPES), [], "a null set does not throw");
+}
+
+group("report.js · buildPrintHtml");
+
+{
+  const stub = (key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key);
+  const records = [
+    fx({ id: "a", type: "insurance", title: "ENGIE", body: "**vet** en `code`",
+         tags: ["contract"], comment: "opgezegd", reminderAt: "2026-08-01",
+         reminderType: "Jaarlijks", pinned: true,
+         links: [{ id: "1", label: "Portaal", url: "https://engie.example/x" }],
+         attachments: [{ mediaId: "m", filename: "contract.pdf" }] }),
+  ];
+  const html = buildPrintHtml(records, { t: stub, lang: "nl", today: "2026-08-04", includeBody: true, types: TYPES });
+
+  assertTrue(html.includes("print__head"), "there is a header");
+  assertTrue(html.includes("print__summary"), "an overview print has a summary table");
+  assertTrue(html.includes("ENGIE"), "the record appears");
+  assertTrue(html.includes("<strong>vet</strong>"), "the body is rendered as Markdown");
+  assertTrue(html.includes("<code>code</code>"), "code spans survive into print");
+  assertTrue(html.includes("https://engie.example/x"), "link URLs are printed — that is the point on paper");
+  assertTrue(html.includes("contract.pdf"), "attachment names are printed");
+  assertTrue(html.includes("print.overdue"), "an overdue reminder is marked as such");
+
+  const noBody = buildPrintHtml(records, { t: stub, lang: "nl", today: "2026-08-04", includeBody: false, types: TYPES });
+  assertTrue(!noBody.includes("<strong>vet</strong>"), "includeBody:false omits the body");
+  assertTrue(noBody.includes("ENGIE"), "…but keeps the record itself");
+
+  const single = buildPrintHtml(records, { t: stub, lang: "nl", today: "2026-08-04", single: true, types: TYPES });
+  assertTrue(!single.includes("print__summary"), "a single-record print has no summary of itself");
+  assertTrue(single.includes("ENGIE"), "…and still prints the record");
+}
+{
+  const stub = (key) => key;
+  assertTrue(
+    buildPrintHtml([], { t: stub, types: TYPES }).includes("print.noRecords"),
+    "an empty collection prints a message rather than an empty page"
+  );
+}
+{
+  // The print document is built as an HTML string, so every field must escape.
+  const stub = (key) => key;
+  const nasty = fx({ title: '<img src=x onerror="alert(1)">', comment: "<b>x</b>",
+                     tags: ["<script>"], links: [{ id: "1", label: "<i>", url: "javascript:alert(1)" }],
+                     attachments: [{ mediaId: "m", filename: "<svg onload=1>" }] });
+  const html = buildPrintHtml([nasty], { t: stub, types: TYPES });
+  assertTrue(!html.includes("<img src=x"), "a title cannot inject a tag into the print document");
+  assertTrue(!html.includes("<b>x</b>"), "a comment cannot inject a tag");
+  assertTrue(!html.includes("<svg onload"), "an attachment filename cannot inject a tag");
+  assertTrue(html.includes("&lt;"), "the payloads come through escaped");
+}
+
+group("report.js · exportFilename");
+
+assertEqual(
+  exportFilename("json", new Date(2026, 7, 4)),
+  "huisbeheer-2026-08-04.json",
+  "the filename carries a sortable local date"
+);
+assertEqual(exportFilename("csv", new Date(2026, 0, 9)), "huisbeheer-2026-01-09.csv", "month and day are padded");
+
+group("help.js");
+
+{
+  const nl = helpText("nl");
+  const en = helpText("en");
+  assertTrue(nl.length > 2000, "the Dutch help is substantial, not a stub");
+  assertTrue(en.length > 2000, "the English help is substantial");
+  assertTrue(nl !== en, "the two languages differ");
+  assertEqual(helpText("zz"), nl, "an unknown language falls back to Dutch");
+  for (const [lang, text] of [["nl", nl], ["en", en]]) {
+    assertTrue(text.startsWith("#"), `${lang} help opens with a heading`);
+    // §8.14 requires these to be explained in plain language.
+    assertTrue(/verwijder|delete/i.test(text), `${lang} help explains deleting`);
+    assertTrue(/export/i.test(text), `${lang} help explains exporting`);
+  }
+  assertTrue(/wint altijd/i.test(nl), "the Dutch help states that deletes always win");
+  assertTrue(/always win/i.test(en), "the English help states that deletes always win");
+  assertTrue(/dit apparaat/i.test(nl), "the Dutch help says where the data lives");
+  assertTrue(/this device/i.test(en), "the English help says where the data lives");
+}
+{
+  // §13.12: the renderer is line-based, so a wrapped paragraph shatters into
+  // <br>s. Guard the shape of the source, not just its content.
+  const lines = helpText("nl").split("\n");
+  const stray = lines.filter((line, i) => {
+    const next = lines[i + 1] || "";
+    const isProse = line.trim() && !line.startsWith("#") && !line.startsWith("-") && !line.startsWith("`");
+    return isProse && next.trim() && !next.startsWith("-") && !next.startsWith("#");
+  });
+  assertDeepEqual(stray, [], "no help paragraph is split across two source lines (§13.12)");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// db.js — the record contract
+// ═══════════════════════════════════════════════════════════════════════════
+group("db.js · makeId");
+
+assertTrue(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(makeId()),
+  "returns a uuid-shaped string"
+);
+{
+  const seen = new Set();
+  for (let i = 0; i < 500; i++) seen.add(makeId());
+  assertEqual(seen.size, 500, "500 ids are all distinct");
+}
+
+group("db.js · makeRecord (the §5 envelope)");
+
+{
+  const r = makeRecord();
+  const ENVELOPE = [
+    "id", "type", "createdAt", "updatedAt", "deletedAt", "restoredAt", "purgedAt",
+    "title", "comment", "tags", "pinned", "reminderAt", "linkedIds",
+    "body", "reminderType", "links", "attachments",
+  ];
+  for (const field of ENVELOPE) {
+    assertTrue(field in r, `every record carries \`${field}\``);
+  }
+  assertEqual(r.deletedAt, null, "a new record is not a tombstone");
+  assertEqual(r.restoredAt, null, "restoredAt starts null");
+  assertEqual(r.purgedAt, null, "purgedAt starts null");
+  assertEqual(r.type, DEFAULT_TYPE, "defaults to the default type");
+  assertEqual(r.pinned, false, "pinned starts false");
+  assertEqual(r.reminderAt, null, "reminderAt starts null");
+  assertEqual(r.reminderType, "", "reminderType starts empty");
+  assertEqual(r.createdAt, r.updatedAt, "createdAt equals updatedAt on creation");
+  assertTrue(!Number.isNaN(Date.parse(r.createdAt)), "createdAt is a parseable ISO string");
+}
+
+assertEqual(makeRecord({ type: "warranty" }).type, "warranty", "accepts a known type");
+assertEqual(makeRecord({ type: "nonsense" }).type, DEFAULT_TYPE, "rejects an unknown type");
+assertEqual(makeRecord({ type: null }).type, DEFAULT_TYPE, "null type falls back to the default");
+
+{
+  const tags = ["water", "contract"];
+  const r = makeRecord({ tags });
+  tags.push("mutated");
+  assertDeepEqual(r.tags, ["water", "contract"], "tags array is copied, not aliased");
+}
+{
+  const links = [{ id: "1", label: "x", url: "https://example.com" }];
+  const r = makeRecord({ links });
+  links.length = 0;
+  assertEqual(r.links.length, 1, "links array is copied, not aliased");
+}
+assertDeepEqual(makeRecord({ tags: "oops" }).tags, [], "a non-array tags value becomes an empty array");
+assertDeepEqual(makeRecord({ linkedIds: null }).linkedIds, [], "a null linkedIds becomes an empty array");
+assertEqual(makeRecord({ id: "keep-me" }).id, "keep-me", "an explicit id is preserved (import path)");
+assertEqual(
+  makeRecord({ createdAt: "2020-01-01T00:00:00.000Z" }).createdAt,
+  "2020-01-01T00:00:00.000Z",
+  "an explicit createdAt is preserved (import must not destroy sort order)"
+);
+
+assertEqual(TYPES.length, 7, "there are seven record types");
+assertTrue(TYPES.includes(DEFAULT_TYPE), "the default type is one of the types");
+assertEqual(new Set(TYPES).size, TYPES.length, "no duplicate types");
+
+group("db.js · hydrateRecord (read-time normalisation)");
+
+{
+  // What an older or hand-edited record might look like coming off disk.
+  const legacy = { id: "old-1", title: "Alarm", updatedAt: "2025-06-01T00:00:00.000Z" };
+  const r = hydrateRecord(legacy);
+  assertEqual(r.id, "old-1", "keeps the stored id");
+  assertEqual(r.title, "Alarm", "keeps the stored title");
+  assertEqual(r.updatedAt, "2025-06-01T00:00:00.000Z", "never rewrites a stored timestamp");
+  assertDeepEqual(r.tags, [], "fills in a missing tags array");
+  assertDeepEqual(r.attachments, [], "fills in a missing attachments array");
+  assertEqual(r.deletedAt, null, "fills in a missing deletedAt");
+  assertEqual(r.type, DEFAULT_TYPE, "fills in a missing type");
+  assertEqual(r.reminderType, "", "fills in the new reminderType field");
+}
+assertEqual(hydrateRecord(null), null, "null hydrates to null");
+assertEqual(hydrateRecord("nope"), null, "a non-object hydrates to null");
+assertEqual(hydrateRecord({ id: "x", pinned: 1 }).pinned, true, "coerces a truthy pinned to a boolean");
+assertDeepEqual(hydrateRecord({ id: "x", tags: "water" }).tags, [], "a corrupt tags value cannot reach the query engine");
+assertEqual(hydrateRecord({ id: "x", reminderAt: "" }).reminderAt, null, "an empty reminderAt normalises to null");
+
+// ═══════════════════════════════════════════════════════════════════════════
+// db.js — text normalisation
+// ═══════════════════════════════════════════════════════════════════════════
+group("db.js · normalizeSearchText");
+
+assertEqual(normalizeSearchText("Hello"), "hello", "lower-cases");
+assertEqual(normalizeSearchText("  padded  "), "padded", "trims");
+assertEqual(normalizeSearchText("Café"), "cafe", "strips an acute accent");
+assertEqual(normalizeSearchText("Zürich"), "zurich", "strips an umlaut");
+assertEqual(normalizeSearchText("Eén ijsje"), "een ijsje", "strips a Dutch accent");
+assertEqual(normalizeSearchText("Ångström"), "angstrom", "strips a ring diacritic");
+assertEqual(normalizeSearchText("a\u0301"), "a", "strips an already-decomposed mark");
+assertEqual(normalizeSearchText("AB-123"), "ab 123", "punctuation becomes a space");
+assertEqual(normalizeSearchText("192.168.1.1"), "192 168 1 1", "an IP stays four tokens");
+assertEqual(normalizeSearchText("a   b"), "a b", "collapses runs of whitespace");
+assertEqual(normalizeSearchText("e-mail"), "e mail", "hyphen splits");
+assertEqual(normalizeSearchText(null), "", "null normalises to an empty string");
+assertEqual(normalizeSearchText(undefined), "", "undefined normalises to an empty string");
+assertEqual(normalizeSearchText(42), "42", "a number normalises to its digits");
+assertEqual(normalizeSearchText("!!!"), "", "punctuation only normalises to empty");
+assertEqual(
+  normalizeSearchText("Straße"),
+  "straße",
+  "leaves a letter with no decomposition alone (ß is a letter, not an accent)"
+);
+
+group("db.js · buildHaystack");
+
+{
+  const item = fx({
+    title: "ENGIE Elektriciteitscontract",
+    body: "Klantnummer 4455",
+    comment: "opgezegd",
+    reminderType: "Jaarlijkse controle",
+    tags: ["Elektriciteit", "Contract"],
+    links: [{ id: "1", label: "ENGIE Website", url: "https://www.engie.be/nl/" }],
+    attachments: [{ mediaId: "m1", filename: "Contract 2026.pdf", mimeType: "application/pdf" }],
+  });
+  const hay = buildHaystack(item);
+  assertTrue(hay.includes("engie"), "haystack includes the title");
+  assertTrue(hay.includes("4455"), "haystack includes the body");
+  assertTrue(hay.includes("opgezegd"), "haystack includes the comment");
+  assertTrue(hay.includes("jaarlijkse controle"), "haystack includes the reminder type");
+  assertTrue(hay.includes("elektriciteit"), "haystack includes tags");
+  assertTrue(hay.includes("engie be"), "haystack includes link urls");
+  assertTrue(hay.includes("contract 2026 pdf"), "haystack includes attachment filenames");
+  assertEqual(hay, normalizeSearchText(hay), "the haystack is already normalised");
+}
+assertEqual(buildHaystack(null), "", "a null item has an empty haystack");
+assertEqual(buildHaystack(fx({})), "", "an empty record has an empty haystack");
+
+group("db.js · stripTrackingParams");
+
+assertEqual(
+  stripTrackingParams("https://example.com/p?utm_source=x&id=7"),
+  "https://example.com/p?id=7",
+  "drops utm_source, keeps a real parameter"
+);
+assertEqual(
+  stripTrackingParams("https://example.com/p?utm_source=a&utm_medium=b&utm_campaign=c"),
+  "https://example.com/p",
+  "drops every utm_ parameter and the dangling question mark"
+);
+assertEqual(stripTrackingParams("https://example.com/p?fbclid=abc"), "https://example.com/p", "drops fbclid");
+assertEqual(stripTrackingParams("https://example.com/p?gclid=abc"), "https://example.com/p", "drops gclid");
+assertEqual(stripTrackingParams("https://example.com/p?igshid=abc"), "https://example.com/p", "drops igshid");
+assertEqual(
+  stripTrackingParams("https://example.com/p?UTM_SOURCE=x"),
+  "https://example.com/p",
+  "matches tracking parameters case-insensitively"
+);
+assertEqual(
+  stripTrackingParams("https://www.eufy.com/products/e82101w4?ref=navimenu&fliter_category=video-doorbell"),
+  "https://www.eufy.com/products/e82101w4?ref=navimenu&fliter_category=video-doorbell",
+  "a bare `ref` is KEPT — it selects the product variant on real saved links"
+);
+assertEqual(
+  stripTrackingParams("https://twitter.com/x?ref_src=twsrc"),
+  "https://twitter.com/x",
+  "ref_src IS dropped (Twitter-specific, never load-bearing)"
+);
+assertEqual(stripTrackingParams("not a url"), "not a url", "a non-URL is returned untouched");
+assertEqual(stripTrackingParams(""), "", "empty input stays empty");
+assertEqual(stripTrackingParams(null), "", "null input becomes an empty string");
+assertEqual(
+  stripTrackingParams("https://example.com/p?id=1&id=2"),
+  "https://example.com/p?id=1&id=2",
+  "repeated parameters both survive"
+);
+
+group("db.js · normalizeUrl");
+
+assertEqual(normalizeUrl("example.com"), "https://example.com", "adds a missing scheme");
+assertEqual(normalizeUrl("www.example.com/x"), "https://www.example.com/x", "adds a scheme and keeps the path");
+assertEqual(normalizeUrl("HTTPS://Example.COM/Path"), "https://example.com/Path",
+  "lower-cases scheme and host but NOT the path");
+assertEqual(normalizeUrl("https://example.com/"), "https://example.com", "drops a lone trailing slash");
+assertEqual(normalizeUrl("https://example.com/dir/"), "https://example.com/dir/",
+  "keeps a trailing slash on a real path");
+assertEqual(normalizeUrl("http://example.com:80/x"), "http://example.com/x", "drops the default http port");
+assertEqual(normalizeUrl("https://example.com:443/x"), "https://example.com/x", "drops the default https port");
+assertEqual(normalizeUrl("https://example.com:8443/x"), "https://example.com:8443/x", "keeps a non-default port");
+assertEqual(normalizeUrl("https://example.com/p?utm_source=x"), "https://example.com/p", "strips tracking too");
+assertEqual(normalizeUrl("https://example.com/p#"), "https://example.com/p", "drops an empty fragment");
+assertEqual(normalizeUrl("https://example.com/p#section"), "https://example.com/p#section", "keeps a real fragment");
+assertEqual(normalizeUrl("  https://example.com/x  "), "https://example.com/x", "trims surrounding whitespace");
+assertEqual(normalizeUrl(""), "", "empty stays empty");
+assertEqual(normalizeUrl(null), "", "null becomes an empty string");
+assertEqual(normalizeUrl("C:/Users/chris/doc.pdf"), "C:/Users/chris/doc.pdf",
+  "a Windows path is left alone, not mangled into a URL");
+assertEqual(normalizeUrl("just some text"), "just some text", "free text is left alone");
+assertEqual(normalizeUrl("mailto:a@b.com"), "mailto:a@b.com", "a mailto: link survives");
+assertEqual(
+  normalizeUrl("https://procura.farmad.be/#/"),
+  "https://procura.farmad.be/#/",
+  "a hash-router URL keeps its fragment"
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// db.js — the query engine
+// ═══════════════════════════════════════════════════════════════════════════
+group("db.js · queryItemSet — filtering");
+
+{
+  const live = fx({ id: "a", title: "Alarm" });
+  const dead = fx({ id: "b", title: "Oud", deletedAt: "2026-02-01T00:00:00.000Z" });
+  assertDeepEqual(ids(queryItemSet([live, dead])), ["a"], "tombstones are hidden by default");
+  assertDeepEqual(ids(queryItemSet([live, dead], { onlyDeleted: true })), ["b"],
+    "trash mode returns ONLY tombstones");
+  assertEqual(queryItemSet([live, dead]).total, 1, "total counts the filtered set, not the input");
+}
+assertDeepEqual(ids(queryItemSet([])), [], "an empty input gives an empty result");
+assertDeepEqual(ids(queryItemSet(null)), [], "a null input does not throw");
+assertDeepEqual(ids(queryItemSet([null, undefined, fx({ id: "a" })])), ["a"], "skips null entries");
+
+{
+  const items = [
+    fx({ id: "n", type: "note" }),
+    fx({ id: "w", type: "warranty" }),
+    fx({ id: "c", type: "contact" }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items, { type: "warranty" })), ["w"], "filters by type");
+  assertEqual(queryItemSet(items, { type: "" }).total, 3, "an empty type means every type");
+  assertEqual(queryItemSet(items, { type: "nope" }).total, 0, "an unknown type matches nothing");
+}
+
+{
+  const items = [
+    fx({ id: "a", tags: ["water", "contract"] }),
+    fx({ id: "b", tags: ["water"] }),
+    fx({ id: "c", tags: ["Contract", "Water"] }),
+    fx({ id: "d", tags: [] }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items, { tags: ["water"] })).sort(), ["a", "b", "c"], "filters by one tag");
+  assertDeepEqual(ids(queryItemSet(items, { tags: ["water", "contract"] })).sort(), ["a", "c"],
+    "multiple tags are ANDed, not ORed");
+  assertDeepEqual(ids(queryItemSet(items, { tags: ["WATER"] })).sort(), ["a", "b", "c"],
+    "tag matching ignores case");
+  assertEqual(queryItemSet(items, { tags: ["nope"] }).total, 0, "an unused tag matches nothing");
+  assertEqual(queryItemSet(items, { tags: [] }).total, 4, "an empty tag list does not filter");
+}
+
+{
+  const items = [
+    fx({ id: "a", title: "Café Zürich", body: "Reservering" }),
+    fx({ id: "b", title: "Alarm systeem", body: "code 1234" }),
+    fx({ id: "c", title: "Water", body: "De Watergroep" }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items, { search: "cafe" })), ["a"], "search ignores diacritics");
+  assertDeepEqual(ids(queryItemSet(items, { search: "ZURICH" })), ["a"], "search ignores case");
+  assertDeepEqual(ids(queryItemSet(items, { search: "1234" })), ["b"], "search reaches the body");
+  assertDeepEqual(ids(queryItemSet(items, { search: "alarm code" })), ["b"],
+    "multiple terms are ANDed across the whole record");
+  assertDeepEqual(ids(queryItemSet(items, { search: "alarm zurich" })), [],
+    "terms from different records do not match");
+  assertEqual(queryItemSet(items, { search: "   " }).total, 3, "a whitespace-only search does not filter");
+  assertEqual(queryItemSet(items, { search: "" }).total, 3, "an empty search does not filter");
+  assertDeepEqual(ids(queryItemSet(items, { search: "wate" })).sort(), ["c"], "search matches a partial word");
+}
+
+{
+  const items = [
+    fx({ id: "jan", updatedAt: "2026-01-15T10:00:00.000Z", createdAt: "2025-01-15T10:00:00.000Z" }),
+    fx({ id: "feb", updatedAt: "2026-02-15T10:00:00.000Z", createdAt: "2025-02-15T10:00:00.000Z" }),
+    fx({ id: "mar", updatedAt: "2026-03-15T10:00:00.000Z", createdAt: "2025-03-15T10:00:00.000Z" }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items, { dateFrom: "2026-02-01", sortDir: "asc" })), ["feb", "mar"],
+    "dateFrom is inclusive of later records");
+  assertDeepEqual(ids(queryItemSet(items, { dateTo: "2026-02-15", sortDir: "asc" })), ["jan", "feb"],
+    "dateTo is inclusive of the boundary day itself");
+  assertDeepEqual(
+    ids(queryItemSet(items, { dateFrom: "2026-02-01", dateTo: "2026-02-28", sortDir: "asc" })),
+    ["feb"],
+    "a from+to range is closed at both ends"
+  );
+  assertDeepEqual(
+    ids(queryItemSet(items, { dateFrom: "2025-02-01", dateTo: "2025-02-28", dateField: "createdAt" })),
+    ["feb"],
+    "dateField chooses which timestamp the range applies to"
+  );
+  assertEqual(queryItemSet(items, { dateFrom: "2027-01-01" }).total, 0, "a range with no matches is empty");
+  assertEqual(
+    queryItemSet([fx({ id: "x", reminderAt: null })], { dateFrom: "2020-01-01", dateField: "reminderAt" }).total,
+    0,
+    "a record missing the range field is excluded, not crashed on"
+  );
+}
+
+group("db.js · queryItemSet — sorting");
+
+{
+  const items = [
+    fx({ id: "a", updatedAt: "2026-01-01T00:00:00.000Z" }),
+    fx({ id: "b", updatedAt: "2026-03-01T00:00:00.000Z" }),
+    fx({ id: "c", updatedAt: "2026-02-01T00:00:00.000Z" }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items)), ["b", "c", "a"], "defaults to newest updated first");
+  assertDeepEqual(ids(queryItemSet(items, { sortDir: "asc" })), ["a", "c", "b"], "ascending reverses it");
+}
+{
+  const items = [
+    fx({ id: "a", title: "Zolder" }),
+    fx({ id: "b", title: "alarm" }),
+    fx({ id: "c", title: "Éclair" }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items, { sortBy: "title", sortDir: "asc" })), ["b", "c", "a"],
+    "title sort is case- and accent-insensitive");
+}
+{
+  const items = [
+    fx({ id: "a", title: "Item 10" }),
+    fx({ id: "b", title: "Item 2" }),
+    fx({ id: "c", title: "Item 1" }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items, { sortBy: "title", sortDir: "asc" })), ["c", "b", "a"],
+    "title sort is natural: Item 2 before Item 10");
+}
+{
+  const items = [
+    fx({ id: "none", reminderAt: null }),
+    fx({ id: "late", reminderAt: "2026-12-01" }),
+    fx({ id: "soon", reminderAt: "2026-02-01" }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items, { sortBy: "reminderAt", sortDir: "asc" })), ["soon", "late", "none"],
+    "reminder sort ascending puts the soonest first and no-reminder last");
+  assertDeepEqual(ids(queryItemSet(items, { sortBy: "reminderAt", sortDir: "desc" })), ["late", "soon", "none"],
+    "records without a reminder stay last in DESCENDING order too");
+}
+{
+  const items = [
+    fx({ id: "old-pin", pinned: true, updatedAt: "2026-01-01T00:00:00.000Z" }),
+    fx({ id: "new", pinned: false, updatedAt: "2026-05-01T00:00:00.000Z" }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items)), ["old-pin", "new"], "pinned records float to the top");
+  assertDeepEqual(ids(queryItemSet(items, { pinnedFirst: false })), ["new", "old-pin"],
+    "pinnedFirst:false sorts purely by the chosen field");
+  assertDeepEqual(ids(queryItemSet(items, { sortBy: "title", sortDir: "asc" })), ["old-pin", "new"],
+    "pinning beats the sort field whatever it is");
+}
+{
+  // Identical sort keys must still order deterministically, or pagination lies.
+  const same = "2026-01-01T00:00:00.000Z";
+  const items = [fx({ id: "c", updatedAt: same }), fx({ id: "a", updatedAt: same }), fx({ id: "b", updatedAt: same })];
+  assertDeepEqual(ids(queryItemSet(items)), ["a", "b", "c"], "ties break on id, so the order is stable");
+  assertDeepEqual(ids(queryItemSet([...items].reverse())), ["a", "b", "c"],
+    "the same set in a different input order sorts identically");
+}
+assertDeepEqual(
+  ids(queryItemSet([fx({ id: "a" }), fx({ id: "b" })], { sortBy: "nonsense" })).sort(),
+  ["a", "b"],
+  "an unknown sort field falls back rather than throwing"
+);
+assertTrue(SORT_FIELDS.length === 4, "there are four sortable fields");
+assertTrue(typeof makeComparator() === "function", "makeComparator returns a comparator");
+
+group("db.js · queryItemSet — pagination");
+
+{
+  const items = Array.from({ length: 25 }, (_, i) =>
+    fx({ id: `id-${String(i).padStart(2, "0")}`, updatedAt: `2026-01-${String(i + 1).padStart(2, "0")}T00:00:00.000Z` })
+  );
+  const page1 = queryItemSet(items, { sortDir: "asc", limit: 10 });
+  assertEqual(page1.results.length, 10, "first page holds `limit` records");
+  assertEqual(page1.total, 25, "total reports the whole filtered set, not the page");
+  assertEqual(page1.hasMore, true, "hasMore is true while records remain");
+
+  const page3 = queryItemSet(items, { sortDir: "asc", limit: 10, offset: 20 });
+  assertEqual(page3.results.length, 5, "the last page is short");
+  assertEqual(page3.hasMore, false, "hasMore is false on the last page");
+
+  const page2 = queryItemSet(items, { sortDir: "asc", limit: 10, offset: 10 });
+  const seen = [...ids(page1), ...ids(page2), ...ids(page3)];
+  assertEqual(new Set(seen).size, 25, "paging through shows every record exactly once");
+  assertDeepEqual(seen, ids(queryItemSet(items, { sortDir: "asc" })),
+    "the concatenated pages equal the unpaginated result");
+
+  assertEqual(queryItemSet(items, { limit: 0 }).results.length, 25, "limit 0 means no limit");
+  assertEqual(queryItemSet(items, { offset: 999 }).results.length, 0, "an offset past the end is empty");
+  assertEqual(queryItemSet(items, { offset: 999 }).hasMore, false, "…and reports no more");
+  assertEqual(queryItemSet(items, { offset: -5, limit: 3 }).results.length, 3, "a negative offset clamps to 0");
+  assertEqual(queryItemSet(items, { limit: 100 }).hasMore, false, "a limit larger than the set has no more");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// db.js — analytics
+// ═══════════════════════════════════════════════════════════════════════════
+group("db.js · computeStats");
+
+{
+  const today = "2026-08-04";
+  const items = [
+    fx({ id: "a", type: "note", pinned: true, tags: ["water"], reminderAt: "2026-08-01" }),   // overdue
+    fx({ id: "b", type: "note", tags: ["water", "gas"], reminderAt: "2026-08-04" }),          // today
+    fx({ id: "c", type: "warranty", reminderAt: "2026-08-09" }),                              // this week
+    fx({ id: "d", type: "warranty", reminderAt: "2026-12-01" }),                              // far off
+    fx({ id: "e", type: "contact", links: [{ id: "1", label: "x", url: "https://a.b" }] }),
+    fx({ id: "f", type: "contact", attachments: [{ mediaId: "m", filename: "f.pdf" }] }),
+    fx({ id: "z", type: "note", deletedAt: "2026-07-01T00:00:00.000Z" }),
+  ];
+  const s = computeStats(items, today);
+  assertEqual(s.total, 6, "total excludes tombstones");
+  assertEqual(s.deleted, 1, "deleted counts the tombstones");
+  assertEqual(s.byType.note, 2, "per-type count for note");
+  assertEqual(s.byType.warranty, 2, "per-type count for warranty");
+  assertEqual(s.byType.insurance, 0, "an unused type reports zero rather than being absent");
+  assertEqual(s.pinned, 1, "counts pinned");
+  assertEqual(s.withReminder, 4, "counts records carrying a reminder");
+  assertEqual(s.overdue, 1, "counts overdue reminders");
+  assertEqual(s.dueToday, 1, "counts reminders due today");
+  assertEqual(s.dueWeek, 1, "counts reminders due within seven days");
+  assertEqual(s.due, 2, "the badge count is overdue + today");
+  assertEqual(s.tags, 2, "counts distinct tags");
+  assertEqual(s.links, 1, "counts links");
+  assertEqual(s.attachments, 1, "counts attachments");
+  assertEqual(Object.keys(s.byType).length, TYPES.length, "every type appears in the breakdown");
+}
+assertEqual(computeStats([], "2026-08-04").total, 0, "empty input gives zero total");
+assertEqual(computeStats(null, "2026-08-04").total, 0, "null input does not throw");
+assertEqual(
+  computeStats([fx({ reminderAt: "not-a-date" })], "2026-08-04").overdue,
+  0,
+  "a malformed reminder date is counted as neither overdue nor due"
+);
+
+group("db.js · weekStart / bucketItemsByWeek");
+
+assertEqual(weekStart("2026-08-04"), "2026-08-03", "Tuesday belongs to Monday's week");
+assertEqual(weekStart("2026-08-03"), "2026-08-03", "Monday is its own week start");
+assertEqual(weekStart("2026-08-09"), "2026-08-03", "Sunday belongs to the week that started Monday");
+assertEqual(weekStart("2026-01-01"), "2025-12-29", "a week start can fall in the previous year");
+assertEqual(weekStart("nonsense"), "", "an unparseable day gives an empty string");
+
+{
+  const buckets = bucketItemsByWeek(
+    [
+      fx({ id: "a", createdAt: "2026-08-04T10:00:00.000Z" }),
+      fx({ id: "b", createdAt: "2026-08-05T10:00:00.000Z" }),
+      fx({ id: "c", createdAt: "2026-07-28T10:00:00.000Z" }),
+      fx({ id: "old", createdAt: "2020-01-01T10:00:00.000Z" }),
+      fx({ id: "gone", createdAt: "2026-08-04T10:00:00.000Z", deletedAt: "2026-08-05T00:00:00.000Z" }),
+    ],
+    4,
+    { today: "2026-08-06" }
+  );
+  assertEqual(buckets.length, 4, "returns the requested number of weeks");
+  assertEqual(buckets[3].start, "2026-08-03", "the last bucket is the week containing today");
+  assertEqual(buckets[3].count, 2, "counts records in the current week");
+  assertEqual(buckets[2].count, 1, "counts records in the previous week");
+  assertEqual(buckets[0].count, 0, "an empty week reports zero");
+  assertTrue(buckets[0].start < buckets[3].start, "buckets run oldest first");
+  assertEqual(
+    buckets.reduce((n, b) => n + b.count, 0),
+    3,
+    "records outside the window and tombstones are not counted"
+  );
+}
+assertDeepEqual(bucketItemsByWeek([], 0, { today: "2026-08-06" }), [], "zero weeks gives no buckets");
+assertEqual(bucketItemsByWeek(null, 3, { today: "2026-08-06" }).length, 3, "null items still gives empty buckets");
+
+group("db.js · sortTagsByRecency");
+
+{
+  const tags = sortTagsByRecency([
+    fx({ id: "a", tags: ["water"], updatedAt: "2026-01-01T00:00:00.000Z" }),
+    fx({ id: "b", tags: ["alarm"], updatedAt: "2026-05-01T00:00:00.000Z" }),
+    fx({ id: "c", tags: ["water", "alarm"], updatedAt: "2026-03-01T00:00:00.000Z" }),
+    fx({ id: "d", tags: ["oud"], updatedAt: "2026-09-01T00:00:00.000Z", deletedAt: "2026-09-02T00:00:00.000Z" }),
+  ]);
+  assertDeepEqual(tags.map((t) => t.tag), ["alarm", "water"], "most recently used tag first");
+  assertEqual(tags[0].count, 2, "counts how many records carry the tag");
+  assertEqual(tags[0].lastUsedAt, "2026-05-01T00:00:00.000Z", "reports the most recent use");
+  assertTrue(!tags.some((t) => t.tag === "oud"), "tags only used by tombstones are excluded");
+}
+{
+  const tags = sortTagsByRecency([fx({ tags: ["Water"] }), fx({ tags: ["water"] })]);
+  assertEqual(tags.length, 1, "tags differing only in case are one tag");
+  assertEqual(tags[0].count, 2, "…and their counts are combined");
+}
+assertDeepEqual(sortTagsByRecency([]), [], "no items means no tags");
+assertDeepEqual(sortTagsByRecency([fx({ tags: ["", "  "] })]), [], "blank tags are ignored");
+
+group("db.js · reminderTypesInUse (the §14 combobox)");
+
+{
+  const types = reminderTypesInUse([
+    fx({ id: "a", reminderType: "Onderhoud", updatedAt: "2026-01-01T00:00:00.000Z" }),
+    fx({ id: "b", reminderType: "Onderhoud", updatedAt: "2026-02-01T00:00:00.000Z" }),
+    fx({ id: "c", reminderType: "Keuring", updatedAt: "2026-06-01T00:00:00.000Z" }),
+    fx({ id: "d", reminderType: "", updatedAt: "2026-07-01T00:00:00.000Z" }),
+    fx({ id: "e", reminderType: "Weg", deletedAt: "2026-07-02T00:00:00.000Z" }),
+  ]);
+  assertDeepEqual(types.map((x) => x.value), ["Onderhoud", "Keuring"], "most-used suggestion first");
+  assertEqual(types[0].count, 2, "counts uses");
+  assertTrue(!types.some((x) => x.value === "Weg"), "values only on tombstones are excluded");
+  assertTrue(!types.some((x) => x.value === ""), "an empty reminder type is not a suggestion");
+}
+{
+  const types = reminderTypesInUse([fx({ reminderType: "onderhoud" }), fx({ reminderType: "Onderhoud" })]);
+  assertEqual(types.length, 1, "values differing only in case are one suggestion");
+}
+assertDeepEqual(reminderTypesInUse([]), [], "no items means no suggestions");
+
+group("db.js · backlinks");
+
+{
+  const items = [
+    fx({ id: "a", linkedIds: ["b", "c"] }),
+    fx({ id: "b", linkedIds: [] }),
+    fx({ id: "c", linkedIds: ["b"] }),
+    fx({ id: "d", linkedIds: ["b"], deletedAt: "2026-01-02T00:00:00.000Z" }),
+  ];
+  assertDeepEqual(ids(computeBacklinks(items, "b")).sort(), ["a", "c"], "finds records pointing at an id");
+  assertDeepEqual(ids(computeBacklinks(items, "a")), [], "an id nothing points at has no backlinks");
+  assertTrue(!ids(computeBacklinks(items, "b")).includes("d"), "a tombstone is not a backlink");
+  assertDeepEqual(computeBacklinks(items, ""), [], "an empty id has no backlinks");
+  assertDeepEqual([...computeLinkedIdSet(items)].sort(), ["b", "c"], "collects every referenced id once");
+  assertEqual(computeLinkedIdSet([]).size, 0, "no items means no linked ids");
+}
+
+group("db.js · appendActivity (§8.4 ring buffer)");
+
+{
+  const one = appendActivity([], { kind: "sync", outcome: "success", detail: "ok" });
+  assertEqual(one.length, 1, "appends to an empty log");
+  assertEqual(one[0].kind, "sync", "keeps the kind");
+  assertTrue(!Number.isNaN(Date.parse(one[0].at)), "stamps a parseable timestamp");
+
+  const two = appendActivity(one, { kind: "backup", outcome: "error", detail: "boom" });
+  assertEqual(two[0].kind, "backup", "newest entry is first");
+  assertEqual(two[1].kind, "sync", "the older entry moves down");
+  assertEqual(one.length, 1, "the input log is not mutated");
+}
+{
+  let log = [];
+  for (let i = 0; i < ACTIVITY_CAP + 25; i++) log = appendActivity(log, { detail: `entry ${i}` });
+  assertEqual(log.length, ACTIVITY_CAP, "the log is capped");
+  assertEqual(log[0].detail, `entry ${ACTIVITY_CAP + 24}`, "the newest entry survives the cap");
+  assertTrue(!log.some((e) => e.detail === "entry 0"), "the oldest entries are dropped");
+}
+assertEqual(
+  appendActivity([], { detail: "x".repeat(500) })[0].detail.length,
+  ACTIVITY_DETAIL_MAX,
+  "detail is truncated so one bad error cannot fill the store"
+);
+assertEqual(appendActivity(null, { detail: "x" }).length, 1, "a missing log is treated as empty");
+assertEqual(appendActivity([], {}, 0).length, 1, "a cap of zero still keeps the newest entry");
+
+// ═══════════════════════════════════════════════════════════════════════════
+// db.js — IndexedDB. Runs against a SEPARATE database; real data is never
+// touched. §12 says DOM behaviour is verified by driving the app, but storage
+// round-trips are cheap to assert here and catch transaction mistakes early.
+// ═══════════════════════════════════════════════════════════════════════════
+const TEST_DB = "huisbeheer-tests";
+useDatabase(TEST_DB);
+
+group("db.js · IndexedDB — items");
+
+await openDB();
+await clearItems();
+
+{
+  const saved = await putItem(makeRecord({ id: "r1", title: "Alarm", type: "note" }));
+  const read = await getItem("r1");
+  assertEqual(read.title, "Alarm", "a written record reads back");
+  assertEqual(read.type, "note", "the type round-trips");
+  assertTrue(read.updatedAt >= saved.createdAt, "updatedAt is stamped on write");
+  assertEqual(await getItem("nope"), null, "an unknown id reads back null");
+  assertEqual(await getItem(""), null, "an empty id reads back null");
+}
+{
+  const original = makeRecord({ id: "r2", title: "Oud", updatedAt: "2020-01-01T00:00:00.000Z" });
+  const touched = await putItem(original);
+  assertTrue(touched.updatedAt > "2020-01-01T00:00:00.000Z", "putItem bumps updatedAt by default");
+
+  await putItem(makeRecord({ id: "r3", title: "Sync", updatedAt: "2020-01-01T00:00:00.000Z" }), { touch: false });
+  const kept = await getItem("r3");
+  assertEqual(kept.updatedAt, "2020-01-01T00:00:00.000Z",
+    "touch:false preserves updatedAt — the sync/import path depends on it");
+}
+await assertRejects(putItem({ title: "no id" }), "putItem rejects a record with no id");
+
+{
+  const n = await putItems([
+    makeRecord({ id: "b1", title: "Een", updatedAt: "2021-01-01T00:00:00.000Z" }),
+    makeRecord({ id: "b2", title: "Twee", updatedAt: "2021-01-01T00:00:00.000Z" }),
+  ]);
+  assertEqual(n, 2, "putItems reports how many it wrote");
+  assertEqual((await getItem("b1")).updatedAt, "2021-01-01T00:00:00.000Z",
+    "putItems never touches updatedAt (bulk = sync/restore)");
+  assertEqual(await putItems([{ title: "no id" }]), 0, "putItems skips records with no id");
+  assertEqual(await putItems(null), 0, "putItems tolerates a null input");
+}
+
+{
+  const all = await getAllItems();
+  assertEqual(all.length, 5, "getAllItems returns everything written so far");
+  assertTrue(all.every((i) => "reminderType" in i), "records come back hydrated");
+}
+
+{
+  const page = await queryItems({ limit: 2 });
+  assertEqual(page.results.length, 2, "queryItems paginates through the store");
+  assertEqual(page.total, 5, "queryItems totals the whole store");
+  assertEqual((await queryItems({ search: "alarm" })).total, 1, "queryItems searches the store");
+}
+
+group("db.js · IndexedDB — soft delete and trash");
+
+{
+  await softDeleteItem("r1");
+  const gone = await getItem("r1");
+  assertTrue(!!gone, "a soft-deleted record still EXISTS — a hard delete cannot propagate");
+  assertTrue(!!gone.deletedAt, "…and now carries a tombstone timestamp");
+  assertEqual((await queryItems({})).total, 4, "the tombstone drops out of normal queries");
+
+  const trash = await getDeletedItems();
+  assertDeepEqual(trash.map((i) => i.id), ["r1"], "the tombstone appears in the trash");
+  assertEqual(await softDeleteItem("r1"), null, "deleting an already-deleted record is a no-op");
+  assertEqual(await softDeleteItem("nope"), null, "deleting an unknown id is a no-op");
+
+  await putItem({ ...gone, id: "r1", restoredAt: "2026-01-01T00:00:00.000Z" }, { touch: false });
+  assertEqual((await getDeletedItems()).length, 0, "a restored tombstone leaves the trash");
+}
+
+group("db.js · IndexedDB — meta");
+
+{
+  assertEqual(await getMeta("nothing", "fallback"), "fallback", "an unset key returns the fallback");
+  assertEqual(await getMeta("nothing"), null, "an unset key with no fallback returns null");
+  assertEqual(
+    await getMeta("nothing", undefined),
+    null,
+    "passing undefined as the fallback selects the DEFAULT null — so callers " +
+      "must use a sentinel to detect a missing key, never `=== undefined`"
+  );
+  {
+    const sentinel = Symbol("missing");
+    assertEqual(await getMeta("nothing", sentinel), sentinel, "a sentinel fallback passes through");
+    await setMeta("present", false);
+    assertEqual(await getMeta("present", sentinel), false,
+      "a stored `false` is distinguishable from a missing key via the sentinel");
+    await deleteMeta("present");
+  }
+  await setMeta("theme", "paper");
+  assertEqual(await getMeta("theme"), "paper", "a string round-trips");
+  await setMeta("obj", { a: 1, b: [2, 3] });
+  assertDeepEqual(await getMeta("obj"), { a: 1, b: [2, 3] }, "a structured value round-trips");
+  await setMeta("falsy", false);
+  assertEqual(await getMeta("falsy", "fallback"), false,
+    "a stored `false` is returned, NOT replaced by the fallback");
+  await setMeta("zero", 0);
+  assertEqual(await getMeta("zero", 99), 0, "a stored 0 is returned, not replaced by the fallback");
+  await deleteMeta("theme");
+  assertEqual(await getMeta("theme", "gone"), "gone", "a deleted key falls back again");
+}
+
+group("db.js · IndexedDB — activity log");
+
+{
+  await clearActivityLog();
+  assertDeepEqual(await getActivityLog(), [], "the log starts empty");
+  await logActivity("sync", "success", "1 record");
+  await logActivity("autosync", "skipped", "offline");
+  const log = await getActivityLog();
+  assertEqual(log.length, 2, "entries accumulate");
+  assertEqual(log[0].kind, "autosync", "newest first");
+  assertEqual(log[0].outcome, "skipped", "a skip reason is recorded, or sync looks broken");
+  await clearActivityLog();
+  assertDeepEqual(await getActivityLog(), [], "the log clears");
+}
+
+group("db.js · IndexedDB — media");
+
+{
+  const blob = new Blob(["hello"], { type: "text/plain" });
+  const thumb = new Blob(["t"], { type: "text/plain" });
+  await putMedia({ id: "m1", blob, thumbnailBlob: thumb });
+
+  const read = await getMedia("m1");
+  assertTrue(!!read, "media reads back");
+  assertEqual(await read.blob.text(), "hello", "the blob content survives the round-trip");
+  assertEqual(await read.thumbnailBlob.text(), "t", "the thumbnail survives too");
+  assertEqual(await getMedia("nope"), null, "unknown media reads back null");
+
+  const cloneId = await cloneMedia("m1");
+  assertTrue(!!cloneId && cloneId !== "m1", "cloneMedia returns a NEW id");
+  assertEqual(await (await getMedia(cloneId)).blob.text(), "hello", "the clone holds the same bytes");
+  assertEqual(await cloneMedia("nope"), null, "cloning unknown media returns null");
+
+  const keys = await getAllMediaIds();
+  assertTrue(keys.includes("m1") && keys.includes(cloneId), "getAllMediaIds lists both");
+
+  await deleteMedia("m1");
+  assertEqual(await getMedia("m1"), null, "deleted media is gone");
+  assertTrue(!!(await getMedia(cloneId)), "…and the clone is untouched, not sharing storage");
+  await deleteMedia(cloneId);
+}
+
+group("db.js · IndexedDB — stats and storage");
+
+{
+  await clearItems();
+  await putItems([
+    makeRecord({ id: "s1", type: "warranty", reminderAt: "2026-08-01" }),
+    makeRecord({ id: "s2", type: "note" }),
+  ]);
+  const s = await getStats("2026-08-04");
+  assertEqual(s.total, 2, "getStats reads the live store");
+  assertEqual(s.byType.warranty, 1, "…and breaks down by type");
+  assertEqual(s.overdue, 1, "…and honours the `today` it is given");
+
+  const estimate = await getStorageEstimate();
+  assertTrue(estimate === null || typeof estimate.usage === "number",
+    "getStorageEstimate returns a shape or null, never throws");
+}
+
+// Leave nothing behind.
+await clearItems();
+await closeDB();
+await new Promise((resolve) => {
+  const request = indexedDB.deleteDatabase(TEST_DB);
+  request.onsuccess = request.onerror = request.onblocked = () => resolve();
+});
+record(true, "the test database is deleted afterwards");
+
+// ═══════════════════════════════════════════════════════════════════════════
+// i18n.js
+// ═══════════════════════════════════════════════════════════════════════════
+group("i18n.js · t()");
+
+const langBefore = state.lang;
+
+setLang("nl");
+assertEqual(t("action.save"), "Opslaan", "nl lookup");
+setLang("en");
+assertEqual(t("action.save"), "Save", "en lookup");
+assertEqual(t("list.count", { count: 3, total: 18 }), "3 of 18", "interpolates named vars");
+assertEqual(t("list.count", { count: 0, total: 0 }), "0 of 0", "interpolates zero (not treated as absent)");
+assertEqual(t("list.count", {}), "{count} of {total}", "leaves unknown placeholders in place");
+assertEqual(t("list.count"), "{count} of {total}", "no vars leaves the raw template");
+assertEqual(t("no.such.key"), "no.such.key", "an unknown key returns the key itself");
+assertEqual(typeLabel("warranty"), "Warranty", "typeLabel translates a type");
+setLang("nl");
+assertEqual(typeLabel("warranty"), "Garantie", "typeLabel follows the language");
+
+group("i18n.js · dictionary parity");
+
+{
+  const { nl, en } = _dictKeys();
+  const missingEn = nl.filter((k) => !en.includes(k));
+  const missingNl = en.filter((k) => !nl.includes(k));
+  assertDeepEqual(missingEn, [], "every nl key exists in en");
+  assertDeepEqual(missingNl, [], "every en key exists in nl");
+  assertEqual(new Set(nl).size, nl.length, "no duplicate nl keys");
+  assertTrue(nl.length > 0, "the dictionary is not empty");
+}
+{
+  const missing = [];
+  for (const lang of ["nl", "en"]) {
+    setLang(lang);
+    for (const type of TYPES) {
+      if (t(`type.${type}`) === `type.${type}`) missing.push(`${lang}:${type}`);
+    }
+  }
+  assertDeepEqual(missing, [], "every record type has a label in both languages");
+}
+
+setLang(langBefore);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// icons.js
+// ═══════════════════════════════════════════════════════════════════════════
+group("icons.js");
+
+assertTrue(ICON_NAMES.length > 0, "the glyph set is not empty");
+{
+  const broken = ICON_NAMES.filter((n) => !icon(n).startsWith("<svg"));
+  assertDeepEqual(broken, [], "every glyph renders an <svg> root");
+}
+{
+  const empty = ICON_NAMES.filter((n) => !/<(path|circle|rect|ellipse)/.test(icon(n)));
+  assertDeepEqual(empty, [], "every glyph contains at least one drawing element");
+}
+assertTrue(icon("list").includes('stroke="currentColor"'), "glyphs stroke in currentColor so they theme");
+assertTrue(icon("list").includes('aria-hidden="true"'), "glyphs are hidden from assistive tech");
+assertTrue(icon("list", { size: 32 }).includes('width="32"'), "size option is applied");
+assertEqual(icon("definitely-not-a-glyph"), "", "an unknown glyph renders nothing rather than throwing");
+{
+  const missing = TYPES.filter((type) => typeIcon(type) !== `type-${type}`);
+  assertDeepEqual(missing, [], "every record type has its own glyph");
+}
+assertEqual(typeIcon("nonsense"), "type-note", "an unknown type falls back to the note glyph");
+
+// ═══════════════════════════════════════════════════════════════════════════
+// version.js
+// ═══════════════════════════════════════════════════════════════════════════
+group("version.js");
+
+assertTrue(Number.isInteger(VERSION.build), "build is an integer");
+assertTrue(VERSION.build >= 1, "build starts at 1 and only goes up");
+assertTrue(/^\d{2}-\d{2}$/.test(VERSION.date), "date is YY-MM");
+assertTrue(versionLine().includes(String(VERSION.build)), "the About line shows the build number");
+
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Run
+// ═══════════════════════════════════════════════════════════════════════════
+main()
+  .catch((err) => {
+    record(false, "the suite ran to completion", String(err && err.stack ? err.stack : err));
+  })
+  .finally(() => {
+    const summary = document.getElementById("summary");
+    summary.textContent = failed === 0 ? `${passed} passed` : `${failed} FAILED · ${passed} passed`;
+    summary.className = `t-summary ${failed === 0 ? "ok" : "bad"}`;
+    document.title = `${failed === 0 ? "PASS" : "FAIL"} — ${passed}/${passed + failed}`;
+  });
+</script>
+
+</body>
+</html>

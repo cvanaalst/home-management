@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="nl" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Huisbeheer</title>
+
+<meta name="description" content="Lokale, offline-eerste app voor alle informatie over je huis.">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#12161c">
+
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon.png" sizes="32x32">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Huisbeheer">
+
+<!--
+  The theme and density must be on the document BEFORE the first paint, or the
+  user sees a flash of the wrong colours. Module scripts are deferred, so this
+  one preference read has to be inline and synchronous. It is the only inline
+  script in the app and it mirrors state.js — see the comment block there.
+-->
+<script>
+  (function () {
+    try {
+      var themes = ["dark", "light", "midnight", "paper"];
+      var theme = localStorage.getItem("hms.theme");
+      document.documentElement.dataset.theme =
+        themes.indexOf(theme) >= 0 ? theme : "dark";
+      var lang = localStorage.getItem("hms.lang");
+      document.documentElement.lang = lang === "en" ? "en" : "nl";
+    } catch (e) {
+      document.documentElement.dataset.theme = "dark";
+    }
+  })();
+</script>
+
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body data-density="comfortable" class="is-locked">
+
+<!-- ═══ Top bar ═══════════════════════════════════════════════════════════ -->
+<header class="topbar" id="topbar">
+  <button type="button" class="topbar__back icon-btn" id="btn-back"
+          data-i18n-aria="nav.back" data-i18n-title="nav.back" hidden></button>
+
+  <h1 class="topbar__title" id="topbar-title" data-i18n="view.list.title">Overzicht</h1>
+
+  <div class="topbar__actions">
+    <button type="button" class="lock-btn" id="btn-lock" aria-pressed="true">
+      <span class="lock-btn__icon" id="lock-icon"></span>
+      <span class="lock-btn__label" id="lock-label" data-i18n="lock.locked">Vergrendeld</span>
+    </button>
+  </div>
+</header>
+
+<!-- ═══ Views ═════════════════════════════════════════════════════════════ -->
+<main id="views">
+
+  <!-- ── Overview / list ────────────────────────────────────────────────── -->
+  <section class="view" id="view-list" aria-labelledby="topbar-title">
+    <div class="pull-indicator" id="pull-indicator" aria-hidden="true"></div>
+
+    <div class="list-controls">
+      <div class="list-controls__row">
+        <div class="search-field">
+          <span class="search-field__icon" id="search-icon"></span>
+          <input type="search" id="search-input" class="search-field__input"
+                 data-i18n-placeholder="list.search" data-i18n-aria="list.search.aria"
+                 autocomplete="off" spellcheck="false">
+        </div>
+        <button type="button" class="btn btn--ghost btn--icon" id="btn-filters"
+                aria-expanded="false" aria-controls="filter-panel"
+                data-i18n-aria="list.filter.aria" data-i18n-title="list.filter">
+          <span data-icon="filter" data-icon-size="18"></span>
+        </button>
+      </div>
+
+      <div class="chip-row" id="type-filters" role="group" data-i18n-aria="list.filter"></div>
+
+      <div class="filter-panel" id="filter-panel" hidden>
+        <div class="filter-panel__row">
+          <label class="field__label" for="sort-field" data-i18n="list.sort">Sorteren</label>
+          <select class="input input--select" id="sort-field"></select>
+          <button type="button" class="icon-btn" id="btn-sort-dir"></button>
+        </div>
+
+        <div class="filter-panel__row">
+          <label class="field__label" for="date-from" data-i18n="list.dateFrom">Van</label>
+          <input type="date" class="input" id="date-from">
+          <label class="field__label" for="date-to" data-i18n="list.dateTo">Tot</label>
+          <input type="date" class="input" id="date-to">
+        </div>
+
+        <div class="filter-panel__row filter-panel__row--stack">
+          <span class="field__label" data-i18n="list.filterByTag">Labels</span>
+          <div class="chip-row" id="tag-filters" role="group"></div>
+        </div>
+
+        <button type="button" class="btn btn--ghost btn--small" id="btn-clear-filters"
+                data-i18n="list.clearFilters">Filters wissen</button>
+      </div>
+    </div>
+
+    <div class="view__body">
+      <p class="list-count" id="list-count" hidden></p>
+
+      <div class="placeholder" id="list-placeholder">
+        <span class="placeholder__icon" id="list-placeholder-icon"></span>
+        <p class="placeholder__title" id="list-placeholder-title" data-i18n="list.empty.title">Nog niets opgeslagen</p>
+        <p class="placeholder__body" id="list-placeholder-body" data-i18n="list.empty.body">
+          Voeg je eerste item toe met de knop hieronder.
+        </p>
+        <button type="button" class="btn btn--ghost btn--small" id="btn-empty-clear"
+                data-i18n="list.clearFilters" hidden>Filters wissen</button>
+      </div>
+
+      <ul class="record-list" id="record-list" hidden></ul>
+
+      <button type="button" class="btn btn--ghost load-more" id="btn-load-more"
+              data-i18n="list.loadMore" hidden>Meer laden</button>
+    </div>
+
+    <button type="button" class="fab edit-only" id="btn-new"
+            data-i18n-aria="list.new" data-i18n-title="list.new"></button>
+  </section>
+
+  <!-- ── Detail / edit ──────────────────────────────────────────────────── -->
+  <section class="view" id="view-detail" hidden>
+    <div class="view__body" id="detail-body">
+      <div class="placeholder">
+        <p class="placeholder__title" data-i18n="status.soon">Komt in een volgende fase</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Create ─────────────────────────────────────────────────────────── -->
+  <section class="view" id="view-add" hidden>
+    <div class="view__body" id="add-body">
+      <div class="placeholder">
+        <p class="placeholder__title" data-i18n="status.soon">Komt in een volgende fase</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Settings ───────────────────────────────────────────────────────── -->
+  <section class="view" id="view-settings" hidden>
+    <div class="view__body">
+
+      <section class="panel">
+        <h2 class="panel__title" data-i18n="settings.appearance">Weergave</h2>
+
+        <div class="field">
+          <span class="field__label" data-i18n="settings.theme">Thema</span>
+          <div class="segmented" id="theme-choice" role="group" data-i18n-aria="settings.theme">
+            <button type="button" data-theme-value="dark" data-i18n="settings.theme.dark">Donker</button>
+            <button type="button" data-theme-value="light" data-i18n="settings.theme.light">Licht</button>
+            <button type="button" data-theme-value="midnight" data-i18n="settings.theme.midnight">Middernacht</button>
+            <button type="button" data-theme-value="paper" data-i18n="settings.theme.paper">Papier</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field__label" data-i18n="settings.density">Dichtheid</span>
+          <div class="segmented" id="density-choice" role="group" data-i18n-aria="settings.density">
+            <button type="button" data-density-value="comfortable" data-i18n="settings.density.comfortable">Ruim</button>
+            <button type="button" data-density-value="compact" data-i18n="settings.density.compact">Compact</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field__label" data-i18n="settings.language">Taal</span>
+          <div class="segmented" id="lang-choice" role="group" data-i18n-aria="settings.language">
+            <button type="button" data-lang-value="nl" data-i18n="settings.language.nl">Nederlands</button>
+            <button type="button" data-lang-value="en" data-i18n="settings.language.en">Engels</button>
+          </div>
+        </div>
+
+        <div class="field field--stack">
+          <span class="field__label" data-i18n="settings.locked">Alleen-lezen</span>
+          <p class="field__hint" data-i18n="settings.locked.hint"></p>
+          <div class="segmented" id="lock-choice" role="group" data-i18n-aria="settings.locked">
+            <button type="button" data-lock-value="true" data-i18n="lock.locked">Vergrendeld</button>
+            <button type="button" data-lock-value="false" data-i18n="lock.unlocked">Bewerken</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel__title" data-i18n="settings.sync">Synchronisatie</h2>
+
+        <p class="field__hint" data-i18n="sync.intro"></p>
+
+        <div class="field">
+          <span class="field__label" data-i18n="sync.status">Status</span>
+          <span class="badge" id="sync-status-badge"></span>
+        </div>
+        <p class="storage__counts" id="sync-last"></p>
+
+        <div class="field field--stack">
+          <label class="field__label" for="sync-client-id" data-i18n="sync.clientId">OAuth client ID</label>
+          <input type="text" class="input" id="sync-client-id" autocomplete="off"
+                 spellcheck="false" data-i18n-placeholder="sync.clientId.placeholder">
+          <p class="field__hint" data-i18n="sync.clientId.hint"></p>
+          <p class="field__hint field__hint--mono" id="sync-origin"></p>
+          <p class="field__hint field__hint--mono" id="sync-redirect-uri"></p>
+          <button type="button" class="btn btn--ghost btn--small" id="btn-sync-save-id"
+                  data-i18n="sync.clientId.save">Opslaan</button>
+        </div>
+
+        <label class="switch">
+          <input type="checkbox" id="sync-enabled">
+          <span data-i18n="sync.auto">Automatisch synchroniseren bij het openen</span>
+        </label>
+
+        <div class="button-row">
+          <button type="button" class="btn btn--primary" id="btn-sync-now"
+                  data-i18n="sync.now">Nu synchroniseren</button>
+          <button type="button" class="btn btn--ghost" id="btn-sync-backup"
+                  data-i18n="sync.backup">Back-up maken</button>
+          <button type="button" class="btn btn--ghost" id="btn-sync-restore"
+                  data-i18n="sync.restore">Terugzetten…</button>
+          <button type="button" class="btn btn--ghost" id="btn-sync-signout"
+                  data-i18n="sync.signOut">Afmelden</button>
+        </div>
+
+        <div class="field field--stack">
+          <span class="field__label" data-i18n="sync.import">Importeren uit bestand</span>
+          <p class="field__hint" data-i18n="sync.import.hint"></p>
+          <input type="file" id="import-file" accept="application/json,.json" hidden>
+          <button type="button" class="btn btn--ghost btn--small" id="btn-import"
+                  data-i18n="sync.import.choose">Bestand kiezen…</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel__title" data-i18n="settings.storage">Opslag</h2>
+        <div class="storage">
+          <div class="storage__bar" id="storage-bar" role="progressbar"
+               aria-valuemin="0" aria-valuemax="100" hidden>
+            <span class="storage__fill" id="storage-bar-fill"></span>
+          </div>
+          <p class="storage__figure" id="storage-figure"></p>
+          <p class="storage__counts" id="storage-counts"></p>
+        </div>
+        <div class="field">
+          <span class="field__label" data-i18n="storage.persistent">Beschermde opslag</span>
+          <span class="badge" id="storage-persistent"></span>
+        </div>
+        <p class="field__hint" data-i18n="storage.persistent.hint"></p>
+        <button type="button" class="btn btn--ghost btn--small" id="btn-storage-refresh"
+                data-i18n="storage.refresh">Vernieuwen</button>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel__title" data-i18n="settings.export">Exporteren</h2>
+        <div class="field field--stack">
+          <button type="button" class="btn btn--ghost" id="btn-export-json"
+                  data-i18n="export.json">JSON exporteren</button>
+          <p class="field__hint" data-i18n="export.json.hint"></p>
+        </div>
+        <div class="field field--stack">
+          <button type="button" class="btn btn--ghost" id="btn-export-csv"
+                  data-i18n="export.csv">CSV exporteren</button>
+          <p class="field__hint" data-i18n="export.csv.hint"></p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel__title" data-i18n="settings.print">Afdrukken</h2>
+        <label class="switch">
+          <input type="checkbox" id="print-include-body" checked>
+          <span data-i18n="print.includeBody">Volledige inhoud meenemen</span>
+        </label>
+        <button type="button" class="btn btn--ghost" id="btn-print-overview"
+                data-i18n="print.overview">Overzicht afdrukken</button>
+        <p class="field__hint" data-i18n="print.hint"></p>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel__title" data-i18n="settings.data">Gegevens</h2>
+        <nav class="link-list" id="settings-links">
+          <button type="button" class="link-row" data-goto="report">
+            <span class="link-row__icon" data-icon="chart"></span>
+            <span class="link-row__label" data-i18n="settings.report">Inzichten</span>
+            <span class="link-row__chevron" data-icon="chevronRight"></span>
+          </button>
+          <button type="button" class="link-row" data-goto="trash">
+            <span class="link-row__icon" data-icon="trash"></span>
+            <span class="link-row__label" data-i18n="settings.trash">Onlangs verwijderd</span>
+            <span class="link-row__chevron" data-icon="chevronRight"></span>
+          </button>
+          <button type="button" class="link-row" data-goto="activity">
+            <span class="link-row__icon" data-icon="activity"></span>
+            <span class="link-row__label" data-i18n="settings.activity">Activiteit</span>
+            <span class="link-row__chevron" data-icon="chevronRight"></span>
+          </button>
+          <button type="button" class="link-row" data-goto="help">
+            <span class="link-row__icon" data-icon="help"></span>
+            <span class="link-row__label" data-i18n="settings.help">Help</span>
+            <span class="link-row__chevron" data-icon="chevronRight"></span>
+          </button>
+        </nav>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel__title" data-i18n="settings.about">Over</h2>
+        <p class="about__line" id="about-version"></p>
+        <p class="about__privacy" data-i18n="about.privacy"></p>
+      </section>
+
+    </div>
+  </section>
+
+  <!-- ── Insights ───────────────────────────────────────────────────────── -->
+  <section class="view" id="view-report" hidden>
+    <div class="view__body" id="report-body">
+      <div class="placeholder">
+        <p class="placeholder__title" data-i18n="status.soon">Komt in een volgende fase</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Recently deleted ───────────────────────────────────────────────── -->
+  <section class="view" id="view-trash" hidden>
+    <div class="view__body" id="trash-body">
+      <div class="placeholder">
+        <p class="placeholder__title" data-i18n="status.soon">Komt in een volgende fase</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Activity log ───────────────────────────────────────────────────── -->
+  <section class="view" id="view-activity" hidden>
+    <div class="view__body" id="activity-body">
+      <div class="placeholder">
+        <p class="placeholder__title" data-i18n="status.soon">Komt in een volgende fase</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Help ───────────────────────────────────────────────────────────── -->
+  <section class="view" id="view-help" hidden>
+    <div class="view__body markdown-body" id="help-body">
+      <div class="placeholder">
+        <p class="placeholder__title" data-i18n="status.soon">Komt in een volgende fase</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ═══ Tab bar ═══════════════════════════════════════════════════════════ -->
+<nav class="tabbar" id="tabbar">
+  <button type="button" class="tab" data-tab="list" aria-current="page">
+    <span class="tab__icon" data-icon="list"></span>
+    <span class="tab__label" data-i18n="nav.list">Overzicht</span>
+  </button>
+  <button type="button" class="tab" data-tab="settings">
+    <span class="tab__icon" data-icon="sliders"></span>
+    <span class="tab__label" data-i18n="nav.settings">Instellingen</span>
+  </button>
+</nav>
+
+<!-- ═══ Overlay hosts ═════════════════════════════════════════════════════ -->
+<div id="toast-host" class="toast-host" aria-live="polite"></div>
+<div id="dialog-host"></div>
+
+<!-- Populated on demand by the print/report layer; styled only by @media print -->
+<div id="print-root" aria-hidden="true"></div>
+
+<div id="offline-banner" class="offline-banner" hidden>
+  <span data-i18n="status.offline">Geen verbinding</span>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "name": "Huisbeheer — Home Management",
+  "short_name": "Huisbeheer",
+  "description": "Lokale, offline-eerste app voor alle informatie over je huis: notities, documenten, contacten, garanties, verzekeringen en onderhoud.",
+  "id": "/huisbeheer",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#12161c",
+  "theme_color": "#12161c",
+  "lang": "nl",
+  "dir": "ltr",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
