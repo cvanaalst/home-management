@@ -2510,6 +2510,209 @@ body:not(.is-locked) .detail__title {
 }
 
 /* ==========================================================================
+   12l. Collapsible detail panels
+   ========================================================================== */
+
+.detail__section--collapsible {
+  padding: 0;
+  overflow: hidden;
+}
+
+.panel__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--tap);
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel__toggle:hover {
+  background: var(--surface-raised);
+}
+
+.panel__toggle .panel__title {
+  margin: 0;
+  flex: 0 1 auto;
+}
+
+/* The summary is the whole point of a closed panel: it answers "is there
+   anything in here?" so the panel never has to be opened to find out. */
+.panel__summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--step--1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel__chevron {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  transition: transform 0.18s var(--ease);
+}
+
+.panel__toggle[aria-expanded="true"] .panel__chevron {
+  transform: rotate(180deg);
+}
+
+.panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+/* The reminder strip sits between header and body: the badge and "Done" are
+   glanceable and actionable without opening anything. */
+.detail__reminder-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.detail__reminder-strip .reminder {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.topbar__save {
+  margin-inline-end: var(--space-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel__chevron {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   12m. Insights — upcoming, spend, incidents
+   ========================================================================== */
+
+.upcoming,
+.breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.upcoming__row,
+.breakdown__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.upcoming__row:hover,
+.breakdown__row:hover {
+  background: var(--surface-raised);
+}
+
+.upcoming__icon,
+.breakdown__label svg {
+  flex: 0 0 auto;
+}
+
+.upcoming__text,
+.breakdown__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The NAME takes the slack, not the bar. A truncated "CV-ketel Rem" is a row
+   you cannot identify, while a bar 30px shorter still reads fine. */
+.breakdown__label {
+  flex: 1 1 auto;
+}
+
+.breakdown__track {
+  flex: 0 1 32%;
+  min-width: 48px;
+  max-width: 140px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--tag-bg);
+  overflow: hidden;
+}
+
+.breakdown__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+/* Tabular figures so a column of amounts lines up on the decimal. */
+.breakdown__value {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: var(--step--1);
+}
+
+/* On a phone a name, a bar and "€ 363,50" cannot share one line without the
+   name losing — and a row you cannot identify is worthless, while a bar on its
+   own line reads perfectly. So the bar moves down rather than the name
+   shrinking. Both facts survive; only the layout gives way. */
+@media (max-width: 460px) {
+  .breakdown__row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-1) var(--space-2);
+  }
+
+  .breakdown__label {
+    grid-column: 1;
+    flex: 0 1 auto;
+  }
+
+  .breakdown__value {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .breakdown__track {
+    grid-column: 1 / -1;
+    max-width: none;
+    flex: none;
+  }
+}
+
+.tile--accent {
+  border-color: var(--accent);
+}
+
+.tile--accent .tile__value {
+  color: var(--accent);
+  font-size: var(--step-2);
+}
+
+/* ==========================================================================
    13. Print — the app chrome disappears; #print-root becomes the document
    ========================================================================== */
 

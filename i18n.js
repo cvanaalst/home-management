@@ -119,6 +119,21 @@ const dict = {
     "encrypt.sheet.write": "Wachtwoordzin (met de hand invullen):",
     "encrypt.sheet.warning":
       "De app kent deze zin niet en kan hem niet afdrukken \u2014 hij wordt nergens opgeslagen. Raak je hem kwijt, dan zijn de gegevens op Drive definitief onleesbaar.",
+    "report.spendYear": "Uitgegeven in {year}",
+    "report.events": "Gebeurtenissen",
+    "report.upcoming": "Komende 90 dagen",
+    "report.upcoming.none": "Niets gepland in de komende 90 dagen.",
+    "report.spend": "Wat het gekost heeft",
+    "report.spend.total": "{amount} in {year}, over {count} gebeurtenissen.",
+    "report.incidents": "Meeste storingen",
+    "export.ics": "Herinneringen (.ics)",
+    "export.ics.hint":
+      "Importeer \u00e9\u00e9n keer in je agenda. Herhalingen gaan mee, dus je agenda blijft je waarschuwen ook als deze app dicht is.",
+    "export.ics.empty": "Geen herinneringen om te exporteren.",
+    "reminder.toCalendar": "Aan agenda toevoegen",
+    "reminder.toCalendar.done": "Agenda-bestand gedownload",
+    "panel.empty": "leeg",
+    "panel.filled": "ingevuld",
     "nav.timeline": "Tijdlijn",
     "view.timeline.title": "Tijdlijn",
 
@@ -642,6 +657,21 @@ const dict = {
     "encrypt.sheet.write": "Passphrase (fill in by hand):",
     "encrypt.sheet.warning":
       "The app does not know this phrase and cannot print it \u2014 it is never stored anywhere. Lose it and the data on Drive is permanently unreadable.",
+    "report.spendYear": "Spent in {year}",
+    "report.events": "Events",
+    "report.upcoming": "Next 90 days",
+    "report.upcoming.none": "Nothing scheduled in the next 90 days.",
+    "report.spend": "What it has cost",
+    "report.spend.total": "{amount} in {year}, across {count} events.",
+    "report.incidents": "Most incidents",
+    "export.ics": "Reminders (.ics)",
+    "export.ics.hint":
+      "Import once into your calendar. Repeats come along, so your calendar keeps warning you even when this app is closed.",
+    "export.ics.empty": "No reminders to export.",
+    "reminder.toCalendar": "Add to calendar",
+    "reminder.toCalendar.done": "Calendar file downloaded",
+    "panel.empty": "empty",
+    "panel.filled": "filled in",
     "nav.timeline": "Timeline",
     "view.timeline.title": "Timeline",
 

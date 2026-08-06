@@ -45,6 +45,8 @@ import {
   EVENT_TYPES,
   DEFAULT_EVENT_TYPE,
   getVersions,
+  getMeta,
+  setMeta,
   diffRecords,
   applyVersion,
   VERSION_KEEP,
@@ -67,6 +69,7 @@ import {
   openFileViewer,
 } from "./ui.js";
 import { renderMarkdown } from "./markdown.js";
+import { buildIcs } from "./calendar.js";
 
 /** Anything larger than this is refused rather than silently filling the quota. */
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -116,6 +119,9 @@ export function initDetailView(handlers = {}) {
   bindEvents();
 }
 
+/**
+ * A panel that is always open. Title, then content.
+ */
 function section(titleKey, extraClass = "") {
   const wrap = document.createElement("section");
   wrap.className = `panel detail__section ${extraClass}`.trim();
@@ -125,6 +131,88 @@ function section(titleKey, extraClass = "") {
   heading.textContent = t(titleKey);
   wrap.append(heading);
   return wrap;
+}
+
+/**
+ * A panel that starts CLOSED, with a summary in its header.
+ *
+ * ── Why the form needed this ───────────────────────────────────────────────
+ * Every phase added a panel and none was ever merged, so a record ran to
+ * roughly three phone screens with eight sections open at once — and the Save
+ * button sat at the bottom of all of it. Almost none of that is what you came
+ * to look at: files, links, related items, the event history and the revision
+ * list are things you consult occasionally and read constantly.
+ *
+ * Collapsing them costs nothing as long as the header still answers "is there
+ * anything in here?". That is what `setSummary` is for — "Bestanden (2)" and
+ * "Geschiedenis (3 · €263,50)" mean the panel never has to be opened just to
+ * find out it is empty.
+ *
+ * Open/closed is remembered PER USER, not per record: someone who always wants
+ * attachments visible wants that on every record, and re-deciding it for each
+ * one would be the same nuisance in a different shape.
+ */
+function collapsible(titleKey, extraClass = "", { openByDefault = false } = {}) {
+  const wrap = document.createElement("section");
+  wrap.className = `panel detail__section detail__section--collapsible ${extraClass}`.trim();
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "panel__toggle";
+  header.setAttribute("aria-expanded", String(openByDefault));
+
+  const heading = document.createElement("span");
+  heading.className = "panel__title";
+  heading.dataset.i18n = titleKey;
+  heading.textContent = t(titleKey);
+
+  const summary = document.createElement("span");
+  summary.className = "panel__summary";
+
+  const chevron = document.createElement("span");
+  chevron.className = "panel__chevron";
+  chevron.innerHTML = icon("chevronDown", { size: 18 });
+
+  header.append(heading, summary, chevron);
+
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "panel__body";
+  bodyEl.hidden = !openByDefault;
+
+  header.addEventListener("click", () => {
+    const opening = bodyEl.hidden;
+    bodyEl.hidden = !opening;
+    header.setAttribute("aria-expanded", String(opening));
+    rememberPanel(titleKey, opening);
+  });
+
+  wrap.append(header, bodyEl);
+  wrap.body = bodyEl;
+  wrap.setSummary = (text) => {
+    summary.textContent = text || "";
+  };
+  wrap.setOpen = (open) => {
+    bodyEl.hidden = !open;
+    header.setAttribute("aria-expanded", String(open));
+  };
+  wrap.isOpen = () => !bodyEl.hidden;
+  return wrap;
+}
+
+/** Which panels the user has opened. Read once at boot, written on every toggle. */
+const PANEL_STATE_KEY = "detail.openPanels";
+let openPanels = null;
+
+async function loadPanelState() {
+  if (openPanels) return openPanels;
+  openPanels = (await getMeta(PANEL_STATE_KEY, null)) || {};
+  return openPanels;
+}
+
+function rememberPanel(key, open) {
+  if (!openPanels) openPanels = {};
+  openPanels[key] = open;
+  setMeta(PANEL_STATE_KEY, openPanels);
 }
 
 function buildHead() {
@@ -234,7 +322,7 @@ function buildEvent() {
  * dates, and dates are what makes a history worth having.
  */
 function buildHistory() {
-  const wrap = section("history.section", "detail__section--history");
+  const wrap = collapsible("history.section", "detail__section--history");
   el.historyPanel = wrap;
 
   el.historySummary = document.createElement("p");
@@ -248,12 +336,12 @@ function buildHistory() {
   el.historyAdd.className = "btn btn--ghost edit-only";
   el.historyAdd.dataset.i18n = "history.add";
 
-  wrap.append(el.historySummary, el.history, el.historyAdd);
+  wrap.body.append(el.historySummary, el.history, el.historyAdd);
   return wrap;
 }
 
 function buildReminder() {
-  const wrap = section("field.reminder");
+  const wrap = collapsible("field.reminder", "detail__section--reminder");
   el.reminderPanel = wrap;
   const row = document.createElement("div");
   row.className = "detail__grid";
@@ -335,7 +423,25 @@ function buildReminder() {
   el.recurrenceNext.className = "field__hint";
 
   row.append(dateCell, typeCell, repeatCell);
-  wrap.append(el.reminderBadge, row, hint, el.recurrenceNext, el.reminderDone);
+  wrap.body.append(row, hint, el.recurrenceNext);
+
+  // The badge and "Done" sit OUTSIDE the collapsible body, in a strip under the
+  // header. Both are things you act on at a glance — burying a two-word
+  // "overdue" behind a tap, or the button that logs the maintenance event, is
+  // exactly the friction this whole rework exists to remove.
+  // "Add to calendar" sits next to Done, because the calendar is the only
+  // place a reminder can reach you with the app closed.
+  el.reminderIcs = document.createElement("button");
+  el.reminderIcs.type = "button";
+  el.reminderIcs.className = "icon-btn";
+  el.reminderIcs.dataset.i18nAria = "reminder.toCalendar";
+  el.reminderIcs.dataset.i18nTitle = "reminder.toCalendar";
+  el.reminderIcs.innerHTML = icon("calendar", { size: 18 });
+
+  el.reminderStrip = document.createElement("div");
+  el.reminderStrip.className = "detail__reminder-strip";
+  el.reminderStrip.append(el.reminderBadge, el.reminderIcs, el.reminderDone);
+  wrap.insertBefore(el.reminderStrip, wrap.body);
   return wrap;
 }
 
@@ -373,18 +479,19 @@ function buildBody() {
 }
 
 function buildComment() {
-  const wrap = section("field.comment");
+  const wrap = collapsible("field.comment");
+  el.commentPanel = wrap;
   el.comment = document.createElement("textarea");
   el.comment.className = "input";
   el.comment.rows = 2;
   el.comment.dataset.i18nPlaceholder = "field.comment.placeholder";
   el.comment.setAttribute("aria-label", t("field.comment"));
-  wrap.append(el.comment);
+  wrap.body.append(el.comment);
   return wrap;
 }
 
 function buildLinks() {
-  const wrap = section("field.links");
+  const wrap = collapsible("field.links");
   el.linksPanel = wrap;
   el.links = document.createElement("div");
   el.links.className = "row-list";
@@ -408,12 +515,13 @@ function buildLinks() {
   el.linkAdd.dataset.i18n = "field.links.add";
   row.append(el.linkLabel, el.linkUrl, el.linkAdd);
 
-  wrap.append(el.links, row);
+  wrap.body.append(el.links, row);
   return wrap;
 }
 
 function buildAttachments() {
-  const wrap = section("field.attachments");
+  const wrap = collapsible("field.attachments");
+  el.attachmentsPanel = wrap;
   el.attachments = document.createElement("div");
   el.attachments.className = "row-list";
 
@@ -427,12 +535,13 @@ function buildAttachments() {
   el.fileAdd.className = "btn btn--ghost edit-only";
   el.fileAdd.dataset.i18n = "field.attachments.add";
 
-  wrap.append(el.attachments, el.fileInput, el.fileAdd);
+  wrap.body.append(el.attachments, el.fileInput, el.fileAdd);
   return wrap;
 }
 
 function buildRelations() {
-  const wrap = section("field.linked");
+  const wrap = collapsible("field.linked");
+  el.relationsPanel = wrap;
   el.linked = document.createElement("div");
   el.linked.className = "chip-set";
 
@@ -447,7 +556,7 @@ function buildRelations() {
   el.backlinks = document.createElement("div");
   el.backlinks.className = "chip-set";
 
-  wrap.append(el.linked, el.linkedAdd, el.backlinksTitle, el.backlinks);
+  wrap.body.append(el.linked, el.linkedAdd, el.backlinksTitle, el.backlinks);
   return wrap;
 }
 
@@ -459,7 +568,7 @@ function buildRelations() {
  * together with the edit you wanted it for.
  */
 function buildVersions() {
-  const wrap = section("versions.section", "detail__section--versions");
+  const wrap = collapsible("versions.section", "detail__section--versions");
   el.versionsPanel = wrap;
 
   const hint = document.createElement("p");
@@ -469,7 +578,7 @@ function buildVersions() {
   el.versions = document.createElement("div");
   el.versions.className = "version-list";
 
-  wrap.append(hint, el.versions);
+  wrap.body.append(hint, el.versions);
   return wrap;
 }
 
@@ -535,6 +644,7 @@ function bindEvents() {
     markDirty();
   });
   el.reminderDone.addEventListener("click", markReminderDone);
+  el.reminderIcs.addEventListener("click", downloadReminderIcs);
 
   el.tabWrite.addEventListener("click", () => setPreview(false));
   el.tabPreview.addEventListener("click", () => setPreview(true));
@@ -555,6 +665,8 @@ function bindEvents() {
   el.pin.addEventListener("click", togglePin);
   el.print.addEventListener("click", () => callbacks.onPrint(current));
   el.save.addEventListener("click", save);
+  const topSave = $("btn-topbar-save");
+  if (topSave) topSave.addEventListener("click", save);
   el.delete.addEventListener("click", () => callbacks.onDelete(current));
 }
 
@@ -631,7 +743,13 @@ export function currentRecord() {
  * Forget the open record without prompting. Used when the record is being
  * deleted, where asking "discard your unsaved changes?" would be absurd.
  */
+export function hideTopbarSave() {
+  const top = $("btn-topbar-save");
+  if (top) top.hidden = true;
+}
+
 export function closeDetail() {
+  hideTopbarSave();
   current = null;
   isDraft = false;
   pendingMedia.clear();
@@ -724,6 +842,8 @@ async function paint() {
   paintRelations(items);
   paintEventPanels(items);
   await paintVersions();
+  paintPanelSummaries(items);
+  await applyPanelState();
   setPreview(state.locked);
 
   baseline = snapshot();
@@ -772,6 +892,17 @@ function paintStamps() {
 
 function paintReminderBadge() {
   const value = el.reminderAt.value;
+  if (el.reminderPanel && el.reminderPanel.setSummary) {
+    const rule = readRecurrence();
+    el.reminderPanel.setSummary(
+      value
+        ? [formatDate(value, state.lang), rule ? t(`recurrence.${rule.every}`).toLowerCase() : ""]
+            .filter(Boolean)
+            .join(" · ")
+        : t("panel.empty")
+    );
+  }
+  if (el.reminderStrip) el.reminderStrip.hidden = !value;
   if (!value) {
     el.reminderBadge.hidden = true;
     return;
@@ -1092,6 +1223,7 @@ function paintEventPanels(items) {
   if (!history.length) {
     el.history.append(emptyLine("history.empty"));
     el.historySummary.hidden = true;
+    el.historyPanel.setSummary(t("panel.empty"));
     return;
   }
 
@@ -1100,6 +1232,11 @@ function paintEventPanels(items) {
     .reduce((sum, e) => sum + e.amount, 0);
   const hasAmounts = history.some((e) => typeof e.amount === "number");
 
+  el.historyPanel.setSummary(
+    hasAmounts
+      ? `(${history.length} · ${formatAmount(spent, state.lang)})`
+      : `(${history.length})`
+  );
   el.historySummary.hidden = false;
   el.historySummary.textContent = hasAmounts
     ? `${t("history.count", { count: history.length })} · ${t("history.total", { amount: formatAmount(spent, state.lang) })}`
@@ -1158,6 +1295,7 @@ async function paintVersions() {
 
   const versions = await getVersions(current.id);
   el.versionsPanel.hidden = versions.length === 0;
+  el.versionsPanel.setSummary(`(${versions.length})`);
   if (!versions.length) return;
 
   el.versions.textContent = "";
@@ -1227,6 +1365,63 @@ async function restoreVersion(entry) {
   } catch {
     toast(t("error.saveFailed"), "error");
   }
+}
+
+/**
+ * Fill every collapsed header with the one fact that decides whether it is
+ * worth opening. A count alone is enough for most; history earns its total,
+ * because "3 · €263,50" is a different decision from "3".
+ */
+function paintPanelSummaries(items) {
+  const count = (n) => (n ? `(${n})` : t("panel.empty"));
+
+  el.commentPanel.setSummary(current.comment.trim() ? t("panel.filled") : t("panel.empty"));
+  el.linksPanel.setSummary(count((current.links || []).length));
+  el.attachmentsPanel.setSummary(count((current.attachments || []).length));
+
+  const related = computeBacklinks(items, current.id).filter((i) => i.kind !== "event").length +
+    (current.linkedIds || []).length;
+  el.relationsPanel.setSummary(count(related));
+}
+
+/** Restore each panel to the state this user last left it in. */
+async function applyPanelState() {
+  const stored = await loadPanelState();
+  for (const [key, panel] of [
+    ["field.comment", el.commentPanel],
+    ["field.links", el.linksPanel],
+    ["field.attachments", el.attachmentsPanel],
+    ["field.linked", el.relationsPanel],
+    ["field.reminder", el.reminderPanel],
+    ["history.section", el.historyPanel],
+    ["versions.section", el.versionsPanel],
+  ]) {
+    if (panel && typeof panel.setOpen === "function") panel.setOpen(!!stored[key]);
+  }
+}
+
+/** This one reminder as a calendar entry, recurrence and all. */
+function downloadReminderIcs() {
+  if (!current || !el.reminderAt.value) return;
+  const text = buildIcs([
+    {
+      ...current,
+      reminderAt: el.reminderAt.value,
+      reminderType: el.reminderType.value,
+      recurrence: readRecurrence(),
+    },
+  ]);
+  const url = URL.createObjectURL(new Blob([text], { type: "text/calendar" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  // A filename the calendar app will show while importing, so it is obvious
+  // which reminder is being added.
+  anchor.download = `${(current.title || "herinnering").replace(/[^\p{L}\p{N}]+/gu, "-").slice(0, 60)}.ics`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  toast(t("reminder.toCalendar.done"), "success", { duration: 2400 });
 }
 
 /** An event shows what happened where a record shows its type. */
@@ -1303,6 +1498,12 @@ function paintDirty() {
   const dirty = isDirty();
   el.dirtyFlag.hidden = !dirty;
   el.save.disabled = !dirty;
+
+  // Mirrored into the toolbar so Save is reachable without scrolling past
+  // every panel on the record. Shown only when there is something to save —
+  // a permanently disabled button in the chrome is just noise.
+  const top = $("btn-topbar-save");
+  if (top) top.hidden = !dirty || state.locked;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

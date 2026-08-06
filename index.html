@@ -50,6 +50,8 @@
   <h1 class="topbar__title" id="topbar-title" data-i18n="view.list.title">Overzicht</h1>
 
   <div class="topbar__actions">
+    <button type="button" class="btn btn--primary btn--small topbar__save" id="btn-topbar-save"
+            data-i18n="action.save" hidden>Opslaan</button>
     <button type="button" class="lock-btn" id="btn-lock" aria-pressed="true">
       <span class="lock-btn__icon" id="lock-icon"></span>
       <span class="lock-btn__label" id="lock-label" data-i18n="lock.locked">Vergrendeld</span>
@@ -311,6 +313,9 @@
       <section class="panel">
         <h2 class="panel__title" data-i18n="settings.export">Exporteren</h2>
         <div class="field field--stack">
+          <button type="button" class="btn btn--ghost" id="btn-export-ics"
+                  data-i18n="export.ics">Herinneringen (.ics)</button>
+          <p class="field__hint" data-i18n="export.ics.hint"></p>
           <button type="button" class="btn btn--ghost" id="btn-export-json"
                   data-i18n="export.json">JSON exporteren</button>
           <p class="field__hint" data-i18n="export.json.hint"></p>

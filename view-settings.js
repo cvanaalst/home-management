@@ -26,6 +26,7 @@ import {
 } from "./db.js";
 import { toast, formatBytes, formatDateTime, todayIso, escapeHtml } from "./ui.js";
 import { toJsonExport, toCsv, buildPrintHtml, exportFilename } from "./report.js";
+import { buildIcs, icsCount } from "./calendar.js";
 import { renderMarkdown } from "./markdown.js";
 import { helpText } from "./help.js";
 import { TYPES } from "./db.js";
@@ -385,6 +386,7 @@ export function initSettingsView(handlers = {}) {
   bindNotify();
   bindEncryption();
   $("btn-storage-refresh").addEventListener("click", paintStorage);
+  $("btn-export-ics").addEventListener("click", exportIcs);
   $("btn-export-json").addEventListener("click", exportJson);
   $("btn-export-csv").addEventListener("click", exportCsv);
   $("btn-print-overview").addEventListener("click", printOverview);
@@ -737,6 +739,22 @@ function download(text, filename, mime) {
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
   toast(t("export.done", { name: filename }), "success");
+}
+
+/**
+ * Every reminder as one calendar file.
+ *
+ * The only mechanism in this app that can reach the user while it is closed —
+ * see calendar.js for why this is a download and not a feed on Drive.
+ */
+async function exportIcs() {
+  const items = await getAllItems();
+  const count = icsCount(items);
+  if (!count) {
+    toast(t("export.ics.empty"), "info");
+    return;
+  }
+  download(buildIcs(items), exportFilename("ics"), "text/calendar");
 }
 
 async function exportJson() {

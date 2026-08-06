@@ -12,14 +12,23 @@
 import { state } from "./state.js";
 import { t, typeLabel } from "./i18n.js";
 import { icon } from "./icons.js";
-import { TYPES, getAllItems, computeStats, bucketItemsByWeek, sortTagsByRecency } from "./db.js";
-import { formatDate, todayIso } from "./ui.js";
+import {
+  TYPES,
+  getAllItems,
+  computeStats,
+  bucketItemsByWeek,
+  sortTagsByRecency,
+  computeSpend,
+  computeIncidents,
+  computeUpcoming,
+} from "./db.js";
+import { formatDate, todayIso, formatAmount, daysUntil, reminderTone, reminderLabel } from "./ui.js";
 
 const WEEKS = 12;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const $ = (id) => document.getElementById(id);
 
-let callbacks = { onFilterByType: () => {}, onFilterByTag: () => {} };
+let callbacks = { onFilterByType: () => {}, onFilterByTag: () => {}, onOpen: () => {} };
 let root;
 
 export function initReportView(handlers = {}) {
@@ -51,7 +60,14 @@ export async function renderReport() {
     return;
   }
 
-  root.append(buildTiles(stats));
+  const year = today.slice(0, 4);
+  const spend = computeSpend(items, { from: `${year}-01-01`, to: `${year}-12-31` });
+
+  root.append(buildTiles(stats, spend, year));
+  root.append(buildUpcoming(items, today));
+  if (spend.bySubject.length) root.append(buildSpend(spend, year));
+  const incidents = computeIncidents(items);
+  if (incidents.length) root.append(buildIncidents(incidents));
   root.append(buildTypeBreakdown(stats));
   root.append(buildWeekChart(items, today));
   root.append(buildTagCloud(items));
@@ -61,23 +77,35 @@ export async function renderReport() {
 // Tiles
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildTiles(stats) {
+/**
+ * Six tiles that answer questions, not eight that report counts.
+ *
+ * What went: "Links" and "Bestanden", which were nearly always zero — a tile
+ * that never changes is furniture. What arrived: what the house has cost this
+ * year, and how much of its history is on record. Both come from data the app
+ * has been collecting since the timeline shipped and never showed anywhere.
+ */
+function buildTiles(stats, spend, year) {
   const panel = section("view.report.title");
   const grid = document.createElement("div");
   grid.className = "tiles";
 
   const tiles = [
-    { key: "report.total", value: stats.total, glyph: "list" },
+    { key: "report.total", value: String(stats.total), glyph: "list" },
+    {
+      key: "report.spendYear",
+      label: t("report.spendYear", { year }),
+      value: formatAmount(spend.total, state.lang) || "—",
+      glyph: "event-payment",
+      tone: spend.total ? "accent" : "",
+    },
     // Overdue / today / this week rather than a combined "needs attention":
     // that total is equal to "overdue" most days, so it reads as a duplicate
     // and buries the one number that actually differs.
-    { key: "report.overdue", value: stats.overdue, glyph: "bell", tone: stats.overdue ? "danger" : "" },
-    { key: "report.dueToday", value: stats.dueToday, glyph: "bell", tone: stats.dueToday ? "warn" : "" },
-    { key: "report.dueWeek", value: stats.dueWeek, glyph: "calendar" },
-    { key: "report.pinned", value: stats.pinned, glyph: "pin" },
-    { key: "report.tagsCount", value: stats.tags, glyph: "tag" },
-    { key: "report.links", value: stats.links, glyph: "link" },
-    { key: "report.attachments", value: stats.attachments, glyph: "paperclip" },
+    { key: "report.overdue", value: String(stats.overdue), glyph: "bell", tone: stats.overdue ? "danger" : "" },
+    { key: "report.dueToday", value: String(stats.dueToday), glyph: "bell", tone: stats.dueToday ? "warn" : "" },
+    { key: "report.dueWeek", value: String(stats.dueWeek), glyph: "calendar" },
+    { key: "report.events", value: String(stats.events), glyph: "timeline" },
   ];
 
   for (const tile of tiles) {
@@ -88,16 +116,149 @@ function buildTiles(stats) {
     glyph.innerHTML = icon(tile.glyph, { size: 18 });
     const value = document.createElement("span");
     value.className = "tile__value";
-    value.textContent = String(tile.value);
+    value.textContent = tile.value;
     const label = document.createElement("span");
     label.className = "tile__label";
-    label.textContent = t(tile.key);
+    label.textContent = tile.label || t(tile.key);
     box.append(glyph, value, label);
     grid.append(box);
   }
 
   panel.append(grid);
   return panel;
+}
+
+/**
+ * The next ninety days, overdue first.
+ *
+ * Overdue entries are INCLUDED rather than filtered out: something three weeks
+ * late is more upcoming than something due next month, and hiding it because
+ * its date has passed is how a planner quietly stops mentioning the one thing
+ * you most need to do.
+ */
+function buildUpcoming(items, today) {
+  const panel = section("report.upcoming");
+  const upcoming = computeUpcoming(items, today, 90);
+
+  if (!upcoming.length) {
+    panel.append(muted(t("report.upcoming.none")));
+    return panel;
+  }
+
+  const list = document.createElement("div");
+  list.className = "upcoming";
+  for (const record of upcoming.slice(0, 8)) {
+    const days = daysUntil(record.reminderAt, today);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "upcoming__row";
+    row.addEventListener("click", () => callbacks.onOpen(record.id));
+
+    const glyph = document.createElement("span");
+    glyph.className = "upcoming__icon";
+    glyph.innerHTML = icon(`type-${record.type}`, { size: 16 });
+    glyph.style.color = `var(--type-${record.type})`;
+
+    const text = document.createElement("span");
+    text.className = "upcoming__text";
+    text.textContent = record.title || t("detail.newRecord");
+
+    const when = document.createElement("span");
+    when.className = `reminder reminder--${reminderTone(days)}`;
+    when.textContent = reminderLabel(days);
+
+    row.append(glyph, text, when);
+    list.append(row);
+  }
+  panel.append(list);
+  return panel;
+}
+
+/** What each thing has cost, biggest first. */
+function buildSpend(spend, year) {
+  const panel = section("report.spend");
+  const total = document.createElement("p");
+  total.className = "field__hint";
+  total.textContent = t("report.spend.total", {
+    year,
+    amount: formatAmount(spend.total, state.lang),
+    count: spend.count,
+  });
+  panel.append(total);
+
+  const max = Math.max(...spend.bySubject.map((s) => s.amount), 1);
+  const list = document.createElement("div");
+  list.className = "breakdown";
+  for (const entry of spend.bySubject.slice(0, 8)) {
+    list.append(
+      breakdownRow({
+        id: entry.id,
+        label: entry.title || t("detail.newRecord"),
+        type: entry.type,
+        ratio: entry.amount / max,
+        value: formatAmount(entry.amount, state.lang),
+      })
+    );
+  }
+  panel.append(list);
+  return panel;
+}
+
+/** Which things break most — incidents only, so upkeep does not mask failure. */
+function buildIncidents(incidents) {
+  const panel = section("report.incidents");
+  const max = Math.max(...incidents.map((i) => i.count), 1);
+  const list = document.createElement("div");
+  list.className = "breakdown";
+  for (const entry of incidents.slice(0, 6)) {
+    list.append(
+      breakdownRow({
+        id: entry.id,
+        label: entry.title || t("detail.newRecord"),
+        type: entry.type,
+        ratio: entry.count / max,
+        value: String(entry.count),
+        colourVar: "--event-incident",
+      })
+    );
+  }
+  panel.append(list);
+  return panel;
+}
+
+function breakdownRow({ id, label, type, ratio, value, colourVar }) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "breakdown__row";
+  row.addEventListener("click", () => callbacks.onOpen(id));
+
+  const name = document.createElement("span");
+  name.className = "breakdown__label";
+  name.innerHTML = icon(`type-${type}`, { size: 14 });
+  name.style.color = `var(--type-${type})`;
+  name.append(document.createTextNode(label));
+
+  const track = document.createElement("span");
+  track.className = "breakdown__track";
+  const fill = document.createElement("span");
+  fill.className = "breakdown__fill";
+  fill.style.width = `${Math.max(4, Math.round(ratio * 100))}%`;
+  fill.style.background = `var(${colourVar || `--type-${type}`})`;
+  track.append(fill);
+
+  const amount = document.createElement("span");
+  amount.className = "breakdown__value";
+  amount.textContent = value;
+
+  row.append(name, track, amount);
+  return row;
+}
+
+function muted(text) {
+  const p = document.createElement("p");
+  p.className = "muted";
+  p.textContent = text;
+  return p;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

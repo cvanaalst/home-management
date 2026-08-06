@@ -43,6 +43,7 @@ import {
   closeDetail,
   currentRecord,
   refreshDetailLanguage,
+  hideTopbarSave,
 } from "./view-detail.js";
 import { initAddView, paintAddView } from "./view-add.js";
 import {
@@ -127,6 +128,8 @@ function renderView(view, id) {
     $("topbar-title").textContent = t(`view.${view}.title`);
     $("topbar-title").dataset.i18n = `view.${view}.title`;
     $("btn-back").hidden = !PUSH_TARGETS.includes(view);
+    // The toolbar Save belongs to the detail view alone.
+    if (view !== "detail") hideTopbarSave();
 
     document.querySelectorAll(".tab").forEach((tab) => {
       if (tab.dataset.tab === view) tab.setAttribute("aria-current", "page");
@@ -707,6 +710,8 @@ function initViews() {
   });
 
   initReportView({
+    // Same principle for the new panels: a row naming the boiler opens it.
+    onOpen: (id) => navigate("detail", { id }),
     // An insight you cannot act on is trivia: both the bars and the tag cloud
     // jump to the list already filtered.
     onFilterByType: (type) => {

@@ -44,6 +44,7 @@ import {
   exportFilename, CSV_COLUMNS, CSV_SEPARATOR,
 } from "./report.js";
 import { helpText } from "./help.js";
+import { buildIcs, icsCount, icsText, icsDate, icsRrule } from "./calendar.js";
 import { parseItems, SyncError } from "./sync.js";
 import {
   deriveKey, makeSalt, encryptPayload, decryptPayload, isEnvelope, envelopeKdf,
@@ -61,6 +62,7 @@ import {
   KINDS, DEFAULT_KIND, normalizeKind, EVENT_TYPES, DEFAULT_EVENT_TYPE, normalizeEventType,
   RECURRENCE_UNITS, normalizeRecurrence, normalizeAmount,
   nextOccurrence, completeReminder, dueNotification,
+  computeSpend, computeIncidents, computeUpcoming,
   versionKey, versionKeyRange, VERSION_KEEP, STORE_VERSIONS,
   diffRecords, applyVersion, DIFFABLE_FIELDS, getVersions, clearVersions,
   normalizeSearchText, buildHaystack, stripTrackingParams, normalizeUrl,
@@ -2241,6 +2243,146 @@ group("db.js · dueNotification (catch-up on open)");
   assertEqual(plan.total, 5, "all five are counted");
   assertEqual(plan.titles.length, 3, "…but only three are named — a notification is not a list view");
 }
+
+group("db.js · computeSpend");
+
+{
+  const boiler = fx({ id: "b", type: "devices", title: "CV-ketel" });
+  const roof = fx({ id: "r", type: "utilities", title: "Verzekering" });
+  const items = [
+    boiler, roof,
+    fx({ id:"e1", kind:"event", occurredAt:"2026-03-12", amount:129, linkedIds:["b"] }),
+    fx({ id:"e2", kind:"event", occurredAt:"2026-04-01", amount:89.5, linkedIds:["b"] }),
+    fx({ id:"e3", kind:"event", occurredAt:"2026-06-01", amount:340.5, linkedIds:["r"] }),
+    fx({ id:"e4", kind:"event", occurredAt:"2025-06-01", amount:1000, linkedIds:["b"] }),
+    fx({ id:"e5", kind:"event", occurredAt:"2026-05-01", linkedIds:["b"] }),
+  ];
+  const year = computeSpend(items, { from: "2026-01-01", to: "2026-12-31" });
+  assertEqual(year.total, 559, "only amounts inside the window are counted");
+  assertEqual(year.count, 3, "…and an event with no amount is not one of them");
+  assertDeepEqual(year.bySubject.map((s) => [s.title, s.amount]),
+    [["Verzekering", 340.5], ["CV-ketel", 218.5]],
+    "attributed to the subject, biggest first — that is what turns a number into an argument");
+
+  assertEqual(computeSpend(items).total, 1559, "no window means everything ever spent");
+  assertEqual(computeSpend(items, { from: "2027-01-01" }).total, 0, "a window with nothing in it is zero");
+}
+{
+  // occurredAt, not createdAt: entering last year's invoice today must book it
+  // to last year.
+  const late = fx({ id: "e", kind: "event", occurredAt: "2025-02-01", amount: 50,
+                    createdAt: "2026-08-06T00:00:00.000Z" });
+  assertEqual(computeSpend([late], { from: "2026-01-01" }).total, 0,
+    "an invoice entered late is booked to when it HAPPENED");
+}
+{
+  const orphan = fx({ id: "e", kind: "event", occurredAt: "2026-03-01", amount: 75, linkedIds: [] });
+  const spend = computeSpend([orphan]);
+  assertEqual(spend.total, 75, "an event with no subject still counts towards the total");
+  assertDeepEqual(spend.bySubject, [],
+    "…but is attributed to nothing, rather than to an invented bucket");
+}
+{
+  const dead = fx({ id: "d", kind: "event", occurredAt: "2026-03-01", amount: 10,
+                    deletedAt: "2026-03-02T00:00:00.000Z" });
+  assertEqual(computeSpend([dead]).total, 0, "a deleted event costs nothing");
+}
+assertEqual(computeSpend(null).total, 0, "a null set does not throw");
+
+group("db.js · computeIncidents");
+
+{
+  const router = fx({ id: "r", type: "configuration", title: "Router" });
+  const boiler = fx({ id: "b", type: "devices", title: "CV-ketel" });
+  const items = [
+    router, boiler,
+    fx({ id:"i1", kind:"event", eventType:"incident", occurredAt:"2026-01-05", linkedIds:["r"] }),
+    fx({ id:"i2", kind:"event", eventType:"incident", occurredAt:"2026-03-05", linkedIds:["r"] }),
+    fx({ id:"i3", kind:"event", eventType:"incident", occurredAt:"2026-04-05", linkedIds:["b"] }),
+    fx({ id:"m1", kind:"event", eventType:"maintenance", occurredAt:"2026-05-05", linkedIds:["b"] }),
+    fx({ id:"m2", kind:"event", eventType:"maintenance", occurredAt:"2026-06-05", linkedIds:["b"] }),
+  ];
+  const out = computeIncidents(items);
+  assertDeepEqual(out.map((i) => [i.title, i.count]), [["Router", 2], ["CV-ketel", 1]],
+    "incidents ONLY — three maintenance visits must not read as three failures");
+  assertEqual(out[0].last, "2026-03-05", "the most recent failure is carried, for context");
+}
+assertDeepEqual(computeIncidents([]), [], "nothing broken, nothing listed");
+
+group("db.js · computeUpcoming");
+
+{
+  const items = [
+    fx({ id:"late", title:"Schoorsteen", reminderAt:"2026-07-01" }),
+    fx({ id:"soon", title:"Verzekering", reminderAt:"2026-08-20" }),
+    fx({ id:"far", title:"APK", reminderAt:"2027-06-01" }),
+    fx({ id:"none", title:"Router" }),
+    fx({ id:"ev", kind:"event", title:"Gebeurtenis", reminderAt:"2026-08-10" }),
+  ];
+  const out = computeUpcoming(items, "2026-08-06", 90);
+  assertDeepEqual(out.map((i) => i.id), ["late", "soon"],
+    "overdue is INCLUDED and comes first — hiding it is how a planner stops mentioning what matters");
+  assertTrue(!out.some((i) => i.id === "far"), "beyond the window is out");
+  assertTrue(!out.some((i) => i.id === "ev"), "an event is not upcoming; it already happened");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// calendar.js — reminders as iCalendar (§8)
+// ═══════════════════════════════════════════════════════════════════════════
+group("calendar.js · escaping and dates");
+
+assertEqual(icsText("a;b"), "a\\;b", "a semicolon is escaped");
+assertEqual(icsText("a,b"), "a\\,b", "a comma is escaped");
+assertEqual(icsText("a\nb"), "a\\nb", "a newline becomes the literal escape");
+assertEqual(icsText("a\\b"), "a\\\\b",
+  "a backslash is escaped FIRST, or it would double-escape everything after it");
+assertEqual(icsDate("2026-09-15"), "20260915", "dates lose their dashes");
+assertEqual(icsDate("nonsense"), "", "unparseable gives empty");
+
+assertEqual(icsRrule({ every: "year", interval: 1 }), "RRULE:FREQ=YEARLY", "yearly needs no interval");
+assertEqual(icsRrule({ every: "year", interval: 2 }), "RRULE:FREQ=YEARLY;INTERVAL=2", "…but two years does");
+assertEqual(icsRrule({ every: "quarter", interval: 1 }), "RRULE:FREQ=MONTHLY;INTERVAL=3",
+  "a quarter is not an iCalendar unit, so it becomes three months — which is what it is");
+assertEqual(icsRrule({ every: "quarter", interval: 2 }), "RRULE:FREQ=MONTHLY;INTERVAL=6", "…and two quarters six");
+assertEqual(icsRrule(null), "", "no rule, no RRULE");
+assertEqual(icsRrule({ every: "fortnight" }), "", "an unknown unit produces nothing rather than a wrong rule");
+
+group("calendar.js · buildIcs");
+
+{
+  const items = [
+    fx({ id:"a", title:"CV-ketel onderhoud", reminderAt:"2026-09-15",
+         reminderType:"Jaarlijks onderhoud", recurrence:{ every:"year", interval:1 } }),
+    fx({ id:"b", title:"Geen herinnering" }),
+    fx({ id:"c", title:"Verwijderd", reminderAt:"2026-09-01", deletedAt:"2026-08-01T00:00:00.000Z" }),
+    fx({ id:"d", kind:"event", title:"Gebeurtenis", reminderAt:"2026-09-02" }),
+  ];
+  const ics = buildIcs(items, { now: new Date("2026-08-06T12:00:00Z") });
+
+  assertTrue(ics.startsWith("BEGIN:VCALENDAR"), "it is a calendar");
+  assertTrue(ics.trimEnd().endsWith("END:VCALENDAR"), "…and it is closed");
+  assertEqual((ics.match(/BEGIN:VEVENT/g) || []).length, 1,
+    "one event: no reminder, a tombstone and an event are all skipped");
+  assertTrue(ics.includes("UID:a@huisbeheer"),
+    "the UID is derived from the record id, so re-importing UPDATES rather than duplicating");
+  assertTrue(ics.includes("DTSTART;VALUE=DATE:20260915"), "all-day start");
+  assertTrue(ics.includes("DTEND;VALUE=DATE:20260916"),
+    "all-day events end EXCLUSIVE, so a one-day entry ends the next morning");
+  assertTrue(ics.includes("RRULE:FREQ=YEARLY"),
+    "the recurrence goes with it — that is what keeps the calendar reminding you without this app");
+  assertTrue(ics.includes("SUMMARY:CV-ketel onderhoud"), "the title is the summary");
+  assertTrue(ics.includes("BEGIN:VALARM"), "there is an alarm — a silent reminder is not a reminder");
+  assertTrue(ics.includes("\r\n"), "CRLF, which RFC 5545 requires and some calendars enforce");
+}
+{
+  const long = fx({ id:"a", reminderAt:"2026-09-15", title:"x".repeat(200) });
+  const ics = buildIcs([long]);
+  const tooLong = ics.split("\r\n").filter((line) => line.length > 75);
+  assertDeepEqual(tooLong, [], "every line is folded to 75 octets");
+}
+assertEqual(icsCount([fx({ id:"a", reminderAt:"2026-01-01" }), fx({ id:"b" })]), 1,
+  "the count matches what an export would contain");
+assertEqual(icsCount([]), 0, "nothing to export from nothing");
 
 group("db.js · weekStart / bucketItemsByWeek");
 

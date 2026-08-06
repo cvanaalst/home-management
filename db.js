@@ -870,6 +870,107 @@ export function dueNotification(items, today, notifiedThrough) {
   };
 }
 
+/**
+ * What the house has cost, and which things cost it. PURE.
+ *
+ * Only events carry an amount, and only events know when the money was spent —
+ * `occurredAt`, not `createdAt`, or entering last year's invoice today would
+ * book it to this year.
+ *
+ * `bySubject` is what turns a number into a decision: €1,240 is trivia, "€1,240
+ * on the boiler across six call-outs" is an argument for replacing it.
+ */
+export function computeSpend(items, { from = "", to = "" } = {}) {
+  const all = items || [];
+  const titleById = new Map(all.filter((i) => i && !i.deletedAt).map((i) => [i.id, i]));
+
+  const spent = all.filter(
+    (i) =>
+      i &&
+      !i.deletedAt &&
+      normalizeKind(i.kind) === "event" &&
+      typeof i.amount === "number" &&
+      i.occurredAt &&
+      (!from || String(i.occurredAt).slice(0, 10) >= from) &&
+      (!to || String(i.occurredAt).slice(0, 10) <= to)
+  );
+
+  const bySubject = new Map();
+  let total = 0;
+  for (const event of spent) {
+    total += event.amount;
+    // An event with no subject still counts towards the total; it just has
+    // nowhere to be attributed, and inventing a bucket for it would be a lie.
+    for (const id of event.linkedIds || []) {
+      const subject = titleById.get(id);
+      if (!subject || subject.deletedAt || normalizeKind(subject.kind) !== "record") continue;
+      const entry = bySubject.get(id) || { id, title: subject.title, type: subject.type, amount: 0, count: 0 };
+      entry.amount += event.amount;
+      entry.count++;
+      bySubject.set(id, entry);
+      break; // attributed once, to its first live subject
+    }
+  }
+
+  return {
+    total,
+    count: spent.length,
+    bySubject: [...bySubject.values()].sort((a, b) => b.amount - a.amount),
+  };
+}
+
+/**
+ * Which things break most. PURE.
+ *
+ * Incidents only. Three outages on one router is a pattern; three maintenance
+ * events on it is just upkeep, and mixing them would hide the first in the
+ * second.
+ */
+export function computeIncidents(items) {
+  const all = items || [];
+  const byId = new Map(all.filter((i) => i && !i.deletedAt).map((i) => [i.id, i]));
+  const counts = new Map();
+
+  for (const event of all) {
+    if (!event || event.deletedAt) continue;
+    if (normalizeKind(event.kind) !== "event" || event.eventType !== "incident") continue;
+    for (const id of event.linkedIds || []) {
+      const subject = byId.get(id);
+      if (!subject || normalizeKind(subject.kind) !== "record") continue;
+      const entry = counts.get(id) || { id, title: subject.title, type: subject.type, count: 0, last: "" };
+      entry.count++;
+      if (String(event.occurredAt || "") > entry.last) entry.last = event.occurredAt || "";
+      counts.set(id, entry);
+      break;
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.count - a.count || (a.last < b.last ? 1 : -1));
+}
+
+/**
+ * Reminders falling within the next `days`, soonest first. PURE.
+ *
+ * Includes overdue ones: something three weeks late is more upcoming than
+ * something due next month, and dropping it because its date has passed is how
+ * a planner quietly stops mentioning the thing you most need to do.
+ */
+export function computeUpcoming(items, today, days = 90) {
+  const limit = new Date(Date.parse(`${today}T00:00:00Z`) + days * 86400000)
+    .toISOString()
+    .slice(0, 10);
+
+  return (items || [])
+    .filter(
+      (i) =>
+        i &&
+        !i.deletedAt &&
+        normalizeKind(i.kind) === "record" &&
+        i.reminderAt &&
+        String(i.reminderAt).slice(0, 10) <= limit
+    )
+    .sort((a, b) => String(a.reminderAt).localeCompare(String(b.reminderAt)));
+}
+
 /** Whole days from `todayIso` to `dayIso`, date-only. PURE. */
 function daysBetween(dayIso, todayIso) {
   if (!dayIso || !todayIso) return null;
