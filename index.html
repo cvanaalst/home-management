@@ -126,6 +126,7 @@
       </div>
 
       <ul class="record-list" id="record-list" hidden></ul>
+      <ul class="record-list skeleton" id="record-skeleton" aria-hidden="true" hidden></ul>
 
       <button type="button" class="btn btn--ghost load-more" id="btn-load-more"
               data-i18n="list.loadMore" hidden>Meer laden</button>
@@ -193,6 +194,17 @@
             <button type="button" data-lock-value="true" data-i18n="lock.locked">Vergrendeld</button>
             <button type="button" data-lock-value="false" data-i18n="lock.unlocked">Bewerken</button>
           </div>
+        </div>
+      </section>
+
+      <section class="panel" id="install-panel" hidden>
+        <h2 class="panel__title" data-i18n="install.title">Installeren</h2>
+        <p class="field__hint" id="install-hint"></p>
+        <div class="button-row">
+          <button type="button" class="btn btn--primary" id="btn-install"
+                  data-i18n="install.action" hidden>Installeren</button>
+          <button type="button" class="btn btn--ghost btn--small" id="btn-install-dismiss"
+                  data-i18n="install.dismiss">Niet tonen</button>
         </div>
       </section>
 

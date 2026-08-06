@@ -256,6 +256,15 @@ const dict = {
     "csv.id": "Id",
 
     // ── sync (§7, §8.1–8.4) ─────────────────────────────────────────────────
+    "install.title": "Installeren",
+    "install.hint":
+      "Zet Huisbeheer op je beginscherm: dan opent hij als een gewone app, zonder adresbalk, en werkt hij ook zonder internet.",
+    "install.hint.ios":
+      "Tik onderaan op Deel en kies \u201cZet op beginscherm\u201d. Daarna opent Huisbeheer als een gewone app, ook zonder internet.",
+    "install.action": "Installeren",
+    "install.dismiss": "Niet meer tonen",
+    "install.done": "Huisbeheer is ge\u00efnstalleerd",
+
     "settings.sync": "Synchronisatie",
     "sync.intro":
       "Synchroniseer je items via je eigen Google Drive. De app krijgt alleen toegang tot de map die ze zelf aanmaakt — de rest van je Drive blijft onzichtbaar.",
@@ -632,6 +641,15 @@ const dict = {
     "csv.id": "Id",
 
     // ── sync (§7, §8.1–8.4) ─────────────────────────────────────────────────
+    "install.title": "Install",
+    "install.hint":
+      "Put Home Management on your home screen: it then opens like an ordinary app, without an address bar, and works without a connection.",
+    "install.hint.ios":
+      "Tap Share at the bottom and choose \u201cAdd to Home Screen\u201d. Home Management then opens like an ordinary app, connection or not.",
+    "install.action": "Install",
+    "install.dismiss": "Don't show again",
+    "install.done": "Home Management is installed",
+
     "settings.sync": "Sync",
     "sync.intro":
       "Sync your items through your own Google Drive. The app is only ever given access to the folder it creates itself — the rest of your Drive stays invisible to it.",

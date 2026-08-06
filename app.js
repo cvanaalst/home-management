@@ -16,8 +16,8 @@ import {
 } from "./state.js";
 import { t, applyTranslations } from "./i18n.js";
 import { icon } from "./icons.js";
-import { openDB, getMeta, setMeta, requestPersistentStorage } from "./db.js";
-import { toast } from "./ui.js";
+import { openDB, getMeta, setMeta, requestPersistentStorage, getStats } from "./db.js";
+import { toast, todayIso } from "./ui.js";
 
 import {
   initListView,
@@ -41,6 +41,7 @@ import {
   paintSettings,
   paintStorage,
   paintSync,
+  paintInstall,
   printRecords,
   renderHelp,
   refreshSettingsLanguage,
@@ -167,6 +168,7 @@ export async function navigate(view, { id = null, fromPop = false } = {}) {
   if (view === "settings") {
     paintStorage();
     paintSync();
+    paintInstall();
   }
   if (view === "trash") await renderTrash();
   if (view === "activity") await renderActivity();
@@ -277,6 +279,38 @@ function syncThemeColorMeta() {
 // ═══════════════════════════════════════════════════════════════════════════
 // Platform
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * The app-icon badge (§8.16): how many reminders need attention right now.
+ *
+ * This is the strongest nudge a serverless PWA can give. There is no push
+ * server and nothing runs while the app is closed, so the badge is the only
+ * thing that can say "something is due" without the app being open — which is
+ * precisely why it must never go stale.
+ *
+ * Feature-detected and failure-swallowed: browsers that do not support it, and
+ * installed-app-only implementations, both simply do nothing.
+ */
+async function updateAppBadge() {
+  if (!navigator.setAppBadge) return;
+  try {
+    const stats = await getStats(todayIso());
+    if (stats.due > 0) await navigator.setAppBadge(stats.due);
+    else await navigator.clearAppBadge();
+  } catch {
+    /* unsupported, or the app is not installed — not worth reporting */
+  }
+}
+
+/**
+ * Every path that changes records goes through here, so the list and the badge
+ * are refreshed together. Calling refreshList() alone would leave the badge
+ * showing a count from before the edit.
+ */
+async function dataChanged() {
+  await refreshList();
+  updateAppBadge();
+}
 
 /** Offline is a state, not an error (§3.4). */
 function bindConnectivity() {
@@ -412,7 +446,7 @@ function initViews() {
   });
 
   initDetailView({
-    onChanged: () => refreshList(),
+    onChanged: () => dataChanged(),
     onOpen: (id) => navigate("detail", { id }),
     onDelete: (record) => {
       if (!record) return;
@@ -446,7 +480,7 @@ function initViews() {
   });
 
   initTrashView({
-    onChanged: () => refreshList(),
+    onChanged: () => dataChanged(),
     onOpen: (id) => navigate("detail", { id }),
   });
 
@@ -454,7 +488,7 @@ function initViews() {
 
   initSettingsView({
     onNavigate: (view) => navigate(view),
-    onSynced: () => refreshList(),
+    onSynced: () => dataChanged(),
     onPreferenceChange: (key) => {
       if (key === "theme") syncThemeColorMeta();
       if (key === "density") refreshList();
@@ -526,6 +560,8 @@ async function boot() {
     console.warn("OAuth redirect could not be processed:", err.message);
   }
 
+  updateAppBadge();
+
   const start = parseHash(location.hash);
   // fromPop: the URL already says where we are, so nothing is pushed.
   await navigate(start.view, { id: start.id, fromPop: true });
@@ -533,14 +569,14 @@ async function boot() {
   if (resume) {
     // We were sent to Google mid-action; carry on where we left off.
     await syncNow({ interactive: false });
-    await refreshList();
+    await dataChanged();
     await paintSync();
   } else {
     // Best-effort, and every skip reason is logged — auto-sync sits idle on
     // most launches because tokens last about an hour (§13.5).
     maybeAutoSync()
       .then((result) => {
-        if (result && result.ok) refreshList();
+        if (result && result.ok) dataChanged();
       })
       .catch((err) => console.warn("Auto-sync failed:", err.message));
   }

@@ -275,3 +275,42 @@ export function planPurge(tombstone, now = new Date().toISOString()) {
     attachments: [],
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Backup retention (§8.2)
+//
+// Lives here for the same reason computeMediaActions does: it is pure
+// sync-support logic with no DOM, no network and no storage, so it can be
+// tested directly rather than against a live Drive.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** How many backups to keep. The legacy app kept ten; no reason to differ. */
+export const BACKUP_KEEP = 10;
+
+/**
+ * Which backup files to delete. PURE.
+ *
+ * Backups accumulated forever until this existed — a folder of hundreds of
+ * near-identical files, distinguishable only by a timestamp in the name.
+ *
+ * Ordering is by NAME, not by Drive's modifiedTime: the names are
+ * `backup-<ISO>.json`, and an ISO timestamp sorts lexicographically in the
+ * same order as chronologically. Drive's own timestamps can be rewritten by an
+ * unrelated metadata change, which would make the wrong file look newest and
+ * delete a good backup.
+ *
+ * @param {{id:string,name:string}[]} files  everything in the backups folder
+ * @param {number} keep                      how many of the newest to keep
+ * @returns {{id:string,name:string}[]}      the ones to delete, oldest first
+ */
+export function planBackupPruning(files, keep = BACKUP_KEEP) {
+  const backups = (files || []).filter(
+    (file) => file && typeof file.name === "string" && /^backup-.+\.json$/i.test(file.name)
+  );
+  // Newest first, so the survivors are the head of the list.
+  backups.sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0));
+  const doomed = backups.slice(Math.max(0, keep));
+  // Hand them back oldest first: if the run is interrupted the oldest are
+  // already gone, which is the order a human would have chosen.
+  return doomed.reverse();
+}

@@ -320,7 +320,67 @@ export function revealFilters() {
   $("btn-filters").setAttribute("aria-expanded", "true");
 }
 
+/**
+ * Placeholder rows while the first query runs.
+ *
+ * Deliberately delayed: an IndexedDB read of a few thousand records finishes in
+ * milliseconds, so showing this immediately would flash a skeleton on every
+ * render and read as jank rather than progress. It appears only if the wait is
+ * long enough to have been noticed anyway.
+ *
+ * Renders overlap — boot alone fires refreshList() from two places, and typing
+ * in the search box stacks more on top. Every render therefore takes a sequence
+ * number and only the NEWEST one may touch the skeleton, otherwise a timer left
+ * behind by an abandoned render pops the placeholder back up over a list that
+ * has already been painted, and nothing is left to take it down again.
+ */
+const SKELETON_DELAY_MS = 180;
+const SKELETON_ROWS = 5;
+let hasRenderedOnce = false;
+let renderSeq = 0;
+
+function showSkeleton() {
+  const host = $("record-skeleton");
+  if (!host.childElementCount) {
+    host.innerHTML = Array.from({ length: SKELETON_ROWS })
+      .map(
+        () =>
+          '<li class="record skeleton__row"><div class="record__surface">' +
+          '<div class="record__main"><span class="skeleton__icon"></span>' +
+          '<span class="record__text"><span class="skeleton__line skeleton__line--title"></span>' +
+          '<span class="skeleton__line skeleton__line--meta"></span></span></div></div></li>'
+      )
+      .join("");
+  }
+  host.hidden = false;
+  placeholderEl.hidden = true;
+  listEl.hidden = true;
+}
+
+function hideSkeleton() {
+  $("record-skeleton").hidden = true;
+}
+
 async function renderPage({ keepScroll }) {
+  const seq = ++renderSeq;
+  const skeletonTimer = hasRenderedOnce
+    ? null
+    : setTimeout(() => {
+        if (seq === renderSeq) showSkeleton();
+      }, SKELETON_DELAY_MS);
+
+  try {
+    await paintPage({ keepScroll, seq });
+  } finally {
+    clearTimeout(skeletonTimer);
+    hasRenderedOnce = true;
+    // Only the newest render clears the placeholder — and it clears it even if
+    // the query threw, so a failure never leaves the list stuck shimmering.
+    if (seq === renderSeq) hideSkeleton();
+  }
+}
+
+async function paintPage({ keepScroll, seq }) {
   const limit = loaded + PAGE_SIZE;
   const { results, total } = await queryItems({
     search: state.filters.search,
@@ -332,6 +392,9 @@ async function renderPage({ keepScroll }) {
     dateTo: state.filters.dateTo,
     limit,
   });
+
+  // A slower earlier query must not repaint over a newer one's results.
+  if (seq !== renderSeq) return;
 
   // A record inside an open undo window is already gone as far as the user is
   // concerned, even though its tombstone has not been written yet.

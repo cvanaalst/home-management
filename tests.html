@@ -47,6 +47,7 @@ import {
   resolveRecord, mergeItemSets, isEmptyMerge,
   mediaFilename, mediaIdFromFilename, referencedMediaIds, computeMediaActions,
   planRestore, planPurge, MEDIA_SEPARATOR,
+  planBackupPruning, BACKUP_KEEP,
 } from "./merge.js";
 import {
   makeId, makeRecord, hydrateRecord, normalizeType, TYPES, DEFAULT_TYPE, SORT_FIELDS,
@@ -807,6 +808,74 @@ group("merge.js · planPurge (delete forever, §8.5)");
   assertEqual(merged[0].title, "", "the purge wins, so the wiped content does not come back");
   assertEqual(merged[0].purgedAt, "2026-07-01T00:00:00.000Z", "…and purgedAt survives the merge");
 }
+
+group("merge.js · planBackupPruning (rolling backups, §6)");
+
+// The names carry an ISO timestamp with the separators swapped, so sorting them
+// as STRINGS is the same as sorting them by time — and unlike Drive's
+// modifiedTime it cannot be moved by anything touching the file later.
+const backup = (iso) => ({ id: `id-${iso}`, name: `backup-${iso}.json` });
+const stamps = [
+  "2026-01-01T00-00-00-000Z", "2026-02-01T00-00-00-000Z", "2026-03-01T00-00-00-000Z",
+  "2026-04-01T00-00-00-000Z", "2026-05-01T00-00-00-000Z", "2026-06-01T00-00-00-000Z",
+  "2026-07-01T00-00-00-000Z", "2026-08-01T00-00-00-000Z", "2026-09-01T00-00-00-000Z",
+  "2026-10-01T00-00-00-000Z", "2026-11-01T00-00-00-000Z", "2026-12-01T00-00-00-000Z",
+];
+
+assertDeepEqual(planBackupPruning([], 10), [], "nothing to prune in an empty folder");
+assertDeepEqual(planBackupPruning(null, 10), [], "a missing listing is survivable, not a crash");
+assertDeepEqual(
+  planBackupPruning(stamps.slice(0, 10).map(backup), 10),
+  [],
+  "exactly at the limit, nothing is deleted"
+);
+
+{
+  const doomed = planBackupPruning(stamps.map(backup), 10);
+  assertEqual(doomed.length, 2, "12 backups with a limit of 10 leaves 2 doomed");
+  assertDeepEqual(
+    doomed.map((f) => f.name),
+    ["backup-2026-01-01T00-00-00-000Z.json", "backup-2026-02-01T00-00-00-000Z.json"],
+    "the OLDEST two go, and they go oldest-first"
+  );
+}
+
+{
+  // Order in the listing is Drive's business, not ours.
+  const shuffled = [stamps[5], stamps[0], stamps[11], stamps[3]].map(backup);
+  const doomed = planBackupPruning(shuffled, 2);
+  assertDeepEqual(
+    doomed.map((f) => f.name),
+    ["backup-2026-01-01T00-00-00-000Z.json", "backup-2026-04-01T00-00-00-000Z.json"],
+    "an unsorted listing still yields the two oldest"
+  );
+}
+
+{
+  // The backup folder is a user-visible Drive folder; anything else in it —
+  // including the live sync files — must be untouchable.
+  const mixed = [
+    { id: "a", name: "items.json" },
+    { id: "b", name: "media-manifest.json" },
+    { id: "c", name: "holiday-photo.jpg" },
+    { id: "d", name: "notes about backup-2026.json" },
+    ...stamps.slice(0, 3).map(backup),
+  ];
+  const doomed = planBackupPruning(mixed, 1);
+  assertEqual(doomed.length, 2, "only real backups are counted");
+  assertTrue(
+    doomed.every((f) => /^backup-/.test(f.name)),
+    "no foreign file is ever proposed for deletion"
+  );
+}
+
+assertDeepEqual(
+  planBackupPruning([{ id: "x" }, { name: 42 }, null, backup(stamps[0])], 0).map((f) => f.name),
+  ["backup-2026-01-01T00-00-00-000Z.json"],
+  "malformed entries are skipped instead of throwing"
+);
+assertEqual(typeof BACKUP_KEEP, "number", "BACKUP_KEEP is exported so sync.js and the tests agree");
+assertTrue(BACKUP_KEEP > 0, "keeping zero backups would defeat the point");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // report.js — export and print builders (§8.6, §8.7)

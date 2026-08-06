@@ -2246,6 +2246,61 @@ body:not(.is-locked) .detail__title {
 }
 
 /* ==========================================================================
+   12j. Skeleton loader
+   ========================================================================== */
+
+.skeleton__row {
+  pointer-events: none;
+}
+
+.skeleton__icon,
+.skeleton__line {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--tag-bg) 25%,
+    var(--surface-raised) 37%,
+    var(--tag-bg) 63%
+  );
+  background-size: 400% 100%;
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+.skeleton__icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.skeleton__line--title {
+  width: 55%;
+  height: 12px;
+}
+
+.skeleton__line--meta {
+  width: 30%;
+  height: 10px;
+  margin-top: 6px;
+}
+
+@keyframes skeleton-sweep {
+  from { background-position: 100% 50%; }
+  to { background-position: 0 50%; }
+}
+
+/* A shimmer is decoration; without motion it should simply be a flat block
+   rather than pulsing (§10). */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton__icon,
+  .skeleton__line {
+    animation: none;
+    background: var(--tag-bg);
+  }
+}
+
+/* ==========================================================================
    13. Print — the app chrome disappears; #print-root becomes the document
    ========================================================================== */
 

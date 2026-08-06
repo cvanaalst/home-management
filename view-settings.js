@@ -16,7 +16,14 @@ import {
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { versionLine, VERSION } from "./version.js";
-import { getAllItems, getAllMediaIds, getStorageEstimate, requestPersistentStorage } from "./db.js";
+import {
+  getAllItems,
+  getAllMediaIds,
+  getStorageEstimate,
+  requestPersistentStorage,
+  getMeta,
+  setMeta,
+} from "./db.js";
 import { toast, formatBytes, formatDateTime, todayIso } from "./ui.js";
 import { toJsonExport, toCsv, buildPrintHtml, exportFilename } from "./report.js";
 import { renderMarkdown } from "./markdown.js";
@@ -42,6 +49,83 @@ import {
 import { confirmDialog, trapFocus } from "./ui.js";
 
 const $ = (id) => document.getElementById(id);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Install hint (§6 polish)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * The deferred install prompt.
+ *
+ * Registered at module scope, not in init: the event fires early and can only
+ * be replayed later if it was preventDefault()ed the moment it arrived. Miss
+ * it and the browser's own prompt is gone with no way to get it back.
+ */
+let installPrompt = null;
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    installPrompt = event;
+    if ($("install-panel")) paintInstall();
+  });
+  window.addEventListener("appinstalled", () => {
+    installPrompt = null;
+    if ($("install-panel")) $("install-panel").hidden = true;
+  });
+}
+
+/** Already running as an installed app? Then there is nothing to suggest. */
+function isStandalone() {
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true
+  );
+}
+
+/** iOS never fires beforeinstallprompt, so it needs written instructions. */
+function isIOS() {
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+const INSTALL_DISMISSED = "install.dismissed";
+
+async function paintInstall() {
+  const panel = $("install-panel");
+  if (!panel) return;
+
+  const dismissed = await getMeta(INSTALL_DISMISSED, false);
+  const canPrompt = !!installPrompt;
+  const ios = isIOS();
+
+  // Show it only when it can actually lead somewhere: not already installed,
+  // not previously waved away, and either promptable or iOS (where the user
+  // has to do it by hand).
+  panel.hidden = isStandalone() || dismissed || (!canPrompt && !ios);
+  if (panel.hidden) return;
+
+  $("install-hint").textContent = t(canPrompt ? "install.hint" : "install.hint.ios");
+  $("btn-install").hidden = !canPrompt;
+}
+
+function bindInstall() {
+  $("btn-install").addEventListener("click", async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    // A prompt can only be used once; a declined one must not be replayed.
+    installPrompt = null;
+    if (outcome === "accepted") toast(t("install.done"), "success");
+    paintInstall();
+  });
+
+  $("btn-install-dismiss").addEventListener("click", async () => {
+    await setMeta(INSTALL_DISMISSED, true);
+    paintInstall();
+  });
+}
 
 let callbacks = { onNavigate: () => {}, onPreferenceChange: () => {}, onSynced: () => {} };
 
@@ -86,6 +170,7 @@ export function initSettingsView(handlers = {}) {
   });
 
   bindSync();
+  bindInstall();
   $("btn-storage-refresh").addEventListener("click", paintStorage);
   $("btn-export-json").addEventListener("click", exportJson);
   $("btn-export-csv").addEventListener("click", exportCsv);
@@ -382,6 +467,8 @@ async function openRestoreDialog() {
 // Storage (§8.13)
 // ═══════════════════════════════════════════════════════════════════════════
 
+export { paintInstall };
+
 export async function paintStorage() {
   const estimate = await getStorageEstimate();
   const bar = $("storage-bar");
@@ -508,5 +595,6 @@ export function refreshSettingsLanguage() {
   paintSettings();
   paintStorage();
   paintSync();
+  paintInstall();
   if (!$("view-help").hidden) renderHelp();
 }

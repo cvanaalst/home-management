@@ -45,6 +45,8 @@ import {
   computeMediaActions,
   mediaFilename,
   mediaIdFromFilename,
+  planBackupPruning,
+  BACKUP_KEEP,
 } from "./merge.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -702,14 +704,39 @@ export async function backupNow() {
       blob: new Blob([serialiseItems(items)], { type: "application/json" }),
       mimeType: "application/json",
     });
-    await logActivity("backup", "success", `${name} (${items.length})`);
+    // Prune AFTER the new one is safely uploaded, never before: an interrupted
+    // run then costs an old backup, not the one being taken right now.
+    const pruned = await pruneBackups(token, backupFolder);
+
+    // Same terse, language-neutral shape the sync detail uses (↑↓⌫), rather
+    // than a sentence — the log is not i18n'd and must not sprout Dutch (§11).
+    const detail = `${name} (${items.length})` + (pruned ? ` ⌫${pruned}` : "");
+    await logActivity("backup", "success", detail);
     emit("success", name);
-    return { ok: true, name };
+    return { ok: true, name, pruned };
   } catch (err) {
     const detail = err instanceof SyncError ? err.code : String(err.message || err);
     await logActivity("backup", "error", detail);
     emit("error", detail);
     return { error: detail };
+  }
+}
+
+/**
+ * Delete all but the newest BACKUP_KEEP backups. Returns how many went.
+ *
+ * Failures here are swallowed on purpose: the backup itself already succeeded,
+ * and reporting "backup failed" because tidying up did would be a lie that
+ * discourages the user from backing up at all.
+ */
+async function pruneBackups(token, backupFolder) {
+  try {
+    const files = await listFolder(token, backupFolder);
+    const doomed = planBackupPruning(files, BACKUP_KEEP);
+    for (const file of doomed) await deleteFile(token, file.id);
+    return doomed.length;
+  } catch {
+    return 0;
   }
 }
 
