@@ -82,6 +82,19 @@ export function initListView(handlers = {}) {
     $("btn-filters").setAttribute("aria-expanded", String(opening));
   });
 
+  $("btn-types-toggle").addEventListener("click", () => {
+    typesAutoExpanded = false; // an explicit choice outranks the automatic one
+    setTypesExpanded(!typesExpanded);
+  });
+
+  // Chip widths change with the viewport AND with the language, so the
+  // "does it fit?" answer has to be re-asked rather than computed once.
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(measureTypeOverflow, 150);
+  });
+
   $("sort-field").addEventListener("change", (e) => {
     state.filters.sortBy = e.target.value;
     refreshList();
@@ -152,6 +165,69 @@ function clearFilters() {
 // Painting the controls
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** Whether the type row is showing every chip or just the first line. */
+let typesExpanded = false;
+
+/**
+ * True when the row opened ITSELF to reveal an active filter, rather than
+ * because the user asked. Without this distinction the row is sticky: it
+ * auto-opens on filtering and then stays 118px tall forever, which is exactly
+ * the height the collapse existed to save.
+ */
+let typesAutoExpanded = false;
+
+function setTypesExpanded(expanded) {
+  typesExpanded = expanded;
+  const row = $("type-filters");
+  const toggle = $("btn-types-toggle");
+  row.dataset.expanded = String(expanded);
+  toggle.setAttribute("aria-expanded", String(expanded));
+  toggle.innerHTML = icon("chevronDown", { size: 18 });
+  const label = t(expanded ? "list.types.showLess" : "list.types.showAll");
+  toggle.setAttribute("aria-label", label);
+  toggle.title = label;
+}
+
+/**
+ * Show the toggle only when the chips actually overflow one line.
+ *
+ * On a wide screen all eight fit and nothing about the control changes; on a
+ * phone the toggle appears because five of them would otherwise be off-screen.
+ */
+function measureTypeOverflow() {
+  const row = $("type-filters");
+  const toggle = $("btn-types-toggle");
+  const firstChip = row.querySelector(".chip");
+  if (!firstChip) return;
+
+  // Measure a real chip rather than assuming, then ask the layout whether the
+  // content is taller than that single line.
+  const line = Math.round(firstChip.getBoundingClientRect().height);
+  row.style.setProperty("--chip-line", `${line}px`);
+
+  const wasExpanded = row.dataset.expanded === "true";
+  row.dataset.expanded = "true";
+  const overflows = row.scrollHeight > line + 2;
+  row.dataset.expanded = String(wasExpanded);
+
+  toggle.hidden = !overflows;
+
+  // A filtered list must never hide which filter is active: if the selected
+  // chip could be sitting on a hidden line, open the row.
+  if (overflows && state.filters.type && !typesExpanded) {
+    typesAutoExpanded = true;
+    setTypesExpanded(true);
+    return;
+  }
+  // …and fold it back once that reason disappears, unless the user opened it.
+  if (typesAutoExpanded && !state.filters.type) {
+    typesAutoExpanded = false;
+    setTypesExpanded(false);
+    return;
+  }
+  setTypesExpanded(typesExpanded && overflows);
+}
+
 /** The type filter chips. Rebuilt on every language switch. */
 export function paintTypeFilters() {
   const row = $("type-filters");
@@ -164,6 +240,8 @@ export function paintTypeFilters() {
   row.innerHTML =
     chip("", t("type.all"), null) +
     TYPES.map((type) => chip(type, typeLabel(type), `--type-${type}`)).join("");
+
+  measureTypeOverflow();
 }
 
 function paintSortOptions() {

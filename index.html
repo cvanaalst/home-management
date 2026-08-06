@@ -79,7 +79,14 @@
         </button>
       </div>
 
-      <div class="chip-row" id="type-filters" role="group" data-i18n-aria="list.filter"></div>
+      <!-- Collapsed to a single line; the toggle appears only when the chips
+           genuinely do not fit, so nothing changes on a wide screen. -->
+      <div class="chip-group">
+        <div class="chip-row chip-row--collapsible" id="type-filters" role="group"
+             data-i18n-aria="list.filter"></div>
+        <button type="button" class="chip-group__toggle" id="btn-types-toggle"
+                aria-expanded="false" aria-controls="type-filters" hidden></button>
+      </div>
 
       <div class="filter-panel" id="filter-panel" hidden>
         <div class="filter-panel__row">

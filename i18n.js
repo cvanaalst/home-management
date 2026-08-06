@@ -69,6 +69,8 @@ const dict = {
     "list.dateFrom": "Van",
     "list.dateTo": "Tot",
     "list.noTags": "Nog geen labels gebruikt",
+    "list.types.showAll": "Alle soorten tonen",
+    "list.types.showLess": "Minder soorten tonen",
     "list.refreshed": "Overzicht bijgewerkt",
 
     // ── sorting ─────────────────────────────────────────────────────────────
@@ -443,6 +445,8 @@ const dict = {
     "list.dateFrom": "From",
     "list.dateTo": "To",
     "list.noTags": "No tags used yet",
+    "list.types.showAll": "Show all types",
+    "list.types.showLess": "Show fewer types",
     "list.refreshed": "Overview refreshed",
 
     // ── sorting ─────────────────────────────────────────────────────────────

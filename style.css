@@ -435,20 +435,71 @@ body.is-locked .edit-only {
   outline: none;
 }
 
-/* Wide row of chips scrolls itself rather than wrapping the page (§10) */
+/* Chips WRAP; they never scroll sideways.
+   §10 sanctions horizontal scroll for wide content, but a chip row is
+   navigation, not content: with `scrollbar-width: none` there was no cue at
+   all that more existed, and on a 390px iPhone 5 of the 7 record types were
+   simply invisible. Wrapping guarantees nothing is ever hidden; the type row
+   below then collapses to one line so it does not cost 3 rows of height. */
 .chip-row {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   width: 100%;
   max-width: var(--content-max);
   margin-inline: auto;
-  overflow-x: auto;
-  scrollbar-width: none;
-  padding-bottom: 2px;
 }
 
-.chip-row::-webkit-scrollbar {
-  display: none;
+/* ── The collapsible type row ──────────────────────────────────────────── */
+
+.chip-group {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
+
+.chip-group .chip-row {
+  flex: 1;
+  min-width: 0;
+  margin-inline: 0;
+}
+
+/* --chip-line is measured from a real chip in view-list.js, so this stays
+   correct if the chip metrics ever change. */
+.chip-row--collapsible {
+  max-height: var(--chip-line, 34px);
+  overflow: hidden;
+}
+
+.chip-row--collapsible[data-expanded="true"] {
+  max-height: none;
+  overflow: visible;
+}
+
+.chip-group__toggle {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: transform 0.18s var(--ease);
+}
+
+.chip-group__toggle:hover {
+  color: var(--text);
+}
+
+.chip-group__toggle[aria-expanded="true"] {
+  transform: rotate(180deg);
 }
 
 .chip {
