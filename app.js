@@ -16,7 +16,15 @@ import {
 } from "./state.js";
 import { t, applyTranslations } from "./i18n.js";
 import { icon } from "./icons.js";
-import { openDB, getMeta, setMeta, requestPersistentStorage, getStats } from "./db.js";
+import {
+  openDB,
+  getMeta,
+  setMeta,
+  requestPersistentStorage,
+  getStats,
+  getAllItems,
+  dueNotification,
+} from "./db.js";
 import { toast, todayIso } from "./ui.js";
 
 import {
@@ -43,6 +51,7 @@ import {
   paintStorage,
   paintSync,
   paintInstall,
+  paintNotify,
   printRecords,
   renderHelp,
   refreshSettingsLanguage,
@@ -196,6 +205,7 @@ export async function navigate(view, { id = null, fromPop = false } = {}) {
     paintStorage();
     paintSync();
     paintInstall();
+    paintNotify();
   }
   if (view === "trash") await renderTrash();
   if (view === "synclog") await renderSyncLog();
@@ -274,8 +284,29 @@ function refreshLanguage() {
   if (state.currentView === "report") renderReport();
 }
 
+/**
+ * The service worker forwards a notification click here.
+ *
+ * Landing on the plain overview would answer "3 due" with an unsorted list and
+ * leave the user hunting, so the sort is switched to the reminder date.
+ */
+function showDueRecords() {
+  state.filters.sortBy = "reminderAt";
+  state.filters.sortDir = "asc";
+  const field = $("sort-field");
+  if (field) field.value = "reminderAt";
+  revealFilters();
+  navigate("list");
+}
+
 function bindChrome() {
   $("btn-back").addEventListener("click", () => history.back());
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "SHOW_DUE") showDueRecords();
+    });
+  }
 
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => navigate(tab.dataset.tab));
@@ -319,6 +350,58 @@ function syncThemeColorMeta() {
  * Feature-detected and failure-swallowed: browsers that do not support it, and
  * installed-app-only implementations, both simply do nothing.
  */
+const NOTIFIED_THROUGH = "notify.through";
+
+/**
+ * Tell the user what is due, once per day, when they open the app.
+ *
+ * Not push: this app has no server to send one from, so the honest version is
+ * a catch-up the moment the app is opened. It cannot reach anyone who has not
+ * opened it — stated plainly in Settings rather than dressed up.
+ *
+ * Silent unless permission was granted from the Settings button, and silent a
+ * second time on the same day: the surest way to have an app muted for good is
+ * to tell someone the same thing every time they look at it.
+ */
+async function notifyDueOnOpen() {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  try {
+    const [items, through] = await Promise.all([
+      getAllItems(),
+      getMeta(NOTIFIED_THROUGH, null),
+    ]);
+    const today = todayIso();
+    const plan = dueNotification(items, today, through);
+    if (!plan.shouldNotify) return;
+
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) return;
+
+    const title =
+      plan.overdue > 0
+        ? t("notify.overdue", { count: plan.overdue })
+        : t("notify.dueToday", { count: plan.dueToday });
+    const named = plan.titles.filter(Boolean).join(", ");
+    const body = plan.total > plan.titles.length
+      ? t("notify.bodyMore", { titles: named, more: plan.total - plan.titles.length })
+      : named;
+
+    // Through the registration, not `new Notification()`: the constructor is
+    // unavailable in an installed PWA on Android and does nothing useful on
+    // iOS, and only this form survives to a notificationclick handler.
+    await registration.showNotification(title, {
+      body,
+      tag: "hms-due", // one notification, replaced — never a stack of them
+      badge: "icons/icon-192.png",
+      icon: "icons/icon-192.png",
+      data: { view: "due" },
+    });
+    await setMeta(NOTIFIED_THROUGH, today);
+  } catch {
+    /* notifications are a courtesy; never let one break the launch */
+  }
+}
+
 async function updateAppBadge() {
   if (!navigator.setAppBadge) return;
   try {
@@ -610,6 +693,7 @@ async function boot() {
   }
 
   updateAppBadge();
+  notifyDueOnOpen();
 
   const start = parseHash(location.hash);
   // fromPop: the URL already says where we are, so nothing is pushed.

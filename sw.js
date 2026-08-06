@@ -25,7 +25,7 @@
  * wonder why the suite stopped updating.
  */
 
-const CACHE_VERSION = "hms-v26";
+const CACHE_VERSION = "hms-v27";
 
 const PRECACHE = [
   "./",
@@ -110,6 +110,38 @@ self.addEventListener("install", (event) => {
 /** The app asks for the swap once the user has agreed to reload. */
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
+});
+
+/**
+ * A tapped reminder must land on what is due, not merely open the app.
+ *
+ * An already-open tab is messaged and focused rather than navigated: reloading
+ * it would throw away an unsaved record the user happens to be editing, which
+ * is a steep price for tapping a notification.
+ */
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    (async () => {
+      const scope = new URL("./", self.location.href).href;
+      const clientList = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+
+      for (const client of clientList) {
+        if (!client.url.startsWith(scope)) continue;
+        client.postMessage({ type: "SHOW_DUE" });
+        if ("focus" in client) return client.focus();
+        return undefined;
+      }
+
+      // Nothing open: the hash is the only way to say where to land, because a
+      // cold start has no client to message.
+      if (self.clients.openWindow) return self.clients.openWindow("./#/list");
+      return undefined;
+    })()
+  );
 });
 
 self.addEventListener("activate", (event) => {

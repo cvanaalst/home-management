@@ -24,6 +24,34 @@ const dict = {
     "app.tagline": "Alles over je huis, offline bij de hand",
 
     // ── tabs & navigation ───────────────────────────────────────────────────
+    // ── recurrence and marking a reminder done (§8.16) ─────────────────────
+    "field.recurrence": "Herhaling",
+    "field.recurrence.interval": "Om de hoeveel",
+    "field.reminder.done": "Uitgevoerd",
+    "recurrence.none": "Niet herhalen",
+    "recurrence.day": "Dagelijks",
+    "recurrence.week": "Wekelijks",
+    "recurrence.month": "Maandelijks",
+    "recurrence.quarter": "Per kwartaal",
+    "recurrence.year": "Jaarlijks",
+    "recurrence.next": "Volgende keer: {date}",
+    "recurrence.doneNext": "Vastgelegd. Volgende keer {date}.",
+    "recurrence.doneOnce": "Vastgelegd. De herinnering is afgerond.",
+    "recurrence.loggedFrom": "Afgerond vanuit de herinnering bij {title}.",
+
+    // ── catch-up notification (§8.16) ──────────────────────────────────────
+    "notify.title": "Herinneringen melden",
+    "notify.hint":
+      "Laat de app bij het openen melden wat er openstaat. Er is geen server, dus je krijgt niets te zien zolang de app dicht is \u2014 zet belangrijke afspraken ook in je agenda.",
+    "notify.enable": "Meldingen aanzetten",
+    "notify.granted":
+      "Aan. Je krijgt \u00e9\u00e9n melding per dag zodra je de app opent en er iets openstaat.",
+    "notify.denied":
+      "Geblokkeerd in de browser. Zet meldingen voor deze site weer aan via de site-instellingen.",
+    "notify.unsupported": "Deze browser kan geen meldingen tonen.",
+    "notify.overdue": "{count} openstaand",
+    "notify.dueToday": "{count} vandaag",
+    "notify.bodyMore": "{titles} en nog {more}",
     "nav.timeline": "Tijdlijn",
     "view.timeline.title": "Tijdlijn",
 
@@ -456,6 +484,33 @@ const dict = {
     "app.tagline": "Everything about your home, offline and to hand",
 
     // ── tabs & navigation ───────────────────────────────────────────────────
+    // ── recurrence and marking a reminder done (§8.16) ─────────────────────
+    "field.recurrence": "Repeat",
+    "field.recurrence.interval": "Every how many",
+    "field.reminder.done": "Mark done",
+    "recurrence.none": "Does not repeat",
+    "recurrence.day": "Daily",
+    "recurrence.week": "Weekly",
+    "recurrence.month": "Monthly",
+    "recurrence.quarter": "Quarterly",
+    "recurrence.year": "Yearly",
+    "recurrence.next": "Next time: {date}",
+    "recurrence.doneNext": "Logged. Next time {date}.",
+    "recurrence.doneOnce": "Logged. The reminder is finished.",
+    "recurrence.loggedFrom": "Completed from the reminder on {title}.",
+
+    // ── catch-up notification (§8.16) ──────────────────────────────────────
+    "notify.title": "Reminder notifications",
+    "notify.hint":
+      "Let the app tell you what is due when you open it. There is no server, so nothing reaches you while the app is closed \u2014 put anything critical in your calendar as well.",
+    "notify.enable": "Turn notifications on",
+    "notify.granted": "On. You get one notification a day when you open the app and something is due.",
+    "notify.denied":
+      "Blocked by the browser. Re-enable notifications for this site in its site settings.",
+    "notify.unsupported": "This browser cannot show notifications.",
+    "notify.overdue": "{count} overdue",
+    "notify.dueToday": "{count} due today",
+    "notify.bodyMore": "{titles} and {more} more",
     "nav.timeline": "Timeline",
     "view.timeline.title": "Timeline",
 

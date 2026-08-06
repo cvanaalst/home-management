@@ -120,7 +120,7 @@ export function normalizeEventType(value, kind = DEFAULT_KIND) {
   return EVENT_TYPES.includes(value) ? value : DEFAULT_EVENT_TYPE;
 }
 
-/** How a reminder repeats. The arithmetic itself arrives with the next phase. */
+/** How a reminder repeats. See nextOccurrence() for the arithmetic. */
 export const RECURRENCE_UNITS = ["day", "week", "month", "quarter", "year"];
 
 /**
@@ -135,6 +135,135 @@ export function normalizeRecurrence(value) {
   if (!RECURRENCE_UNITS.includes(value.every)) return null;
   const interval = Math.trunc(Number(value.interval));
   return { every: value.every, interval: Number.isFinite(interval) && interval > 0 ? interval : 1 };
+}
+
+/** Days in a given month. `month` is 1–12. PURE. */
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/** Split "YYYY-MM-DD" into numbers, or null if it is not one. PURE. */
+function parseDay(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").slice(0, 10));
+  if (!m) return null;
+  const [, y, mo, d] = m.map(Number);
+  if (mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo)) return null;
+  return { y, m: mo, d };
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+
+/** How many months one step of a rule covers, or 0 for day/week rules. */
+const MONTHS_PER_STEP = { month: 1, quarter: 3, year: 12 };
+
+/**
+ * Advance an anchor date by `steps` whole steps of a rule. PURE.
+ *
+ * ── Why this always counts from the ANCHOR ─────────────────────────────────
+ * Month arithmetic has to clamp: 31 January plus one month is 28 February,
+ * there being no 31st. The trap is doing it iteratively, because clamping is
+ * lossy — 31 Jan → 28 Feb → 28 Mar → 28 Apr, and a boiler serviced on the 31st
+ * has silently migrated to the 28th forever.
+ *
+ * Counting whole steps from the original anchor every time keeps the intent:
+ * 31 Jan +1 → 28 Feb, +2 → 31 Mar, +3 → 30 Apr. The day only ever bends for
+ * the month that cannot hold it, then springs back.
+ */
+export function addSteps(anchor, rule, steps) {
+  const months = MONTHS_PER_STEP[rule.every];
+  if (months) {
+    const total = (anchor.y * 12 + anchor.m - 1) + months * rule.interval * steps;
+    const y = Math.floor(total / 12);
+    const m = (total % 12) + 1;
+    return { y, m, d: Math.min(anchor.d, daysInMonth(y, m)) };
+  }
+  const perStep = rule.every === "week" ? 7 : 1;
+  const ms = Date.UTC(anchor.y, anchor.m - 1, anchor.d) +
+    perStep * rule.interval * steps * 86400000;
+  const date = new Date(ms);
+  return { y: date.getUTCFullYear(), m: date.getUTCMonth() + 1, d: date.getUTCDate() };
+}
+
+/** A {y,m,d} back to "YYYY-MM-DD". PURE. */
+function formatDay(parts) {
+  return `${parts.y}-${pad2(parts.m)}-${pad2(parts.d)}`;
+}
+
+/**
+ * The first occurrence of a recurring reminder STRICTLY AFTER `fromIso`. PURE.
+ *
+ * Returns null when there is no rule or the anchor is unusable, which reads as
+ * "does not repeat" everywhere it is used.
+ *
+ * Strictly after, not on-or-after, because this answers "it is done, when is
+ * the next one?" — and today's, having just been done, is not it.
+ *
+ * A reminder years overdue rolls forward to the next FUTURE occurrence rather
+ * than to today plus one interval: an annual service missed for three years is
+ * still due on its own anniversary, not on the day someone finally noticed.
+ */
+export function nextOccurrence(dateIso, recurrence, fromIso) {
+  const rule = normalizeRecurrence(recurrence);
+  const anchor = parseDay(dateIso);
+  const from = parseDay(fromIso);
+  if (!rule || !anchor || !from) return null;
+
+  const fromKey = formatDay(from);
+
+  // Seed close to the answer instead of walking there. A daily reminder left
+  // untouched for a decade is 3,650 steps away, and a loop from one would
+  // spend them all.
+  const months = MONTHS_PER_STEP[rule.every];
+  let steps;
+  if (months) {
+    const gap = (from.y * 12 + from.m) - (anchor.y * 12 + anchor.m);
+    steps = Math.floor(gap / (months * rule.interval));
+  } else {
+    const perStep = rule.every === "week" ? 7 : 1;
+    const gapDays =
+      (Date.UTC(from.y, from.m - 1, from.d) - Date.UTC(anchor.y, anchor.m - 1, anchor.d)) / 86400000;
+    steps = Math.floor(gapDays / (perStep * rule.interval));
+  }
+  if (!Number.isFinite(steps) || steps < 0) steps = 0;
+
+  // The seed is an estimate — clamping can put it a step either side — so walk
+  // the last stretch. Bounded so a malformed anchor can never spin forever.
+  for (let guard = 0; guard < 64; guard++) {
+    if (formatDay(addSteps(anchor, rule, steps)) > fromKey) {
+      if (steps === 0 || formatDay(addSteps(anchor, rule, steps - 1)) <= fromKey) {
+        return formatDay(addSteps(anchor, rule, steps));
+      }
+      steps--;
+    } else {
+      steps++;
+    }
+  }
+  return null;
+}
+
+/**
+ * Everything that changes when a recurring reminder is marked done. PURE.
+ *
+ * Returns `{ reminderAt, recurred }` — the new date, or null when the rule has
+ * run out or there never was one. Kept separate from the record write so the
+ * decision is testable without a database.
+ */
+export function completeReminder(record, todayIso) {
+  if (!record || !record.reminderAt) return { reminderAt: null, recurred: false };
+
+  // Advance from whichever is LATER, the scheduled date or today.
+  //
+  // Measuring only from today breaks doing a job early: a service due on the
+  // 31st, done on the 6th, would advance to "the next occurrence after the
+  // 6th" — which is still the 31st, so the button appears to do nothing.
+  // Measuring only from the scheduled date breaks the overdue case, handing
+  // back a date that has already passed.
+  const scheduled = String(record.reminderAt).slice(0, 10);
+  const today = String(todayIso || "").slice(0, 10);
+  const from = scheduled > today ? scheduled : today;
+
+  const next = nextOccurrence(record.reminderAt, record.recurrence, from);
+  return next ? { reminderAt: next, recurred: true } : { reminderAt: null, recurred: false };
 }
 
 /** Resolve a stored amount to a finite number or null. PURE. */
@@ -628,6 +757,48 @@ export function computeStats(items, today) {
     tags: tags.size,
     links,
     attachments,
+  };
+}
+
+/**
+ * Whether to raise a catch-up notification, and what it should say. PURE.
+ *
+ * ── Catch-up, not push ─────────────────────────────────────────────────────
+ * Real push needs a server to send it, which this app does not have and will
+ * not get. So the app tells you what is due the next time you OPEN it. That is
+ * strictly weaker than a phone notification arriving on its own — it cannot
+ * remind you of anything while the app is closed — and it is still worth
+ * having, because the badge only says "3" and this says which three.
+ *
+ * `notifiedThrough` is the last day we already spoke up. Without it every
+ * launch would fire the same notification, and the fastest way to have someone
+ * mute an app for good is to tell them the same thing four times a day.
+ */
+export function dueNotification(items, today, notifiedThrough) {
+  const due = (items || []).filter(
+    (item) =>
+      item &&
+      !item.deletedAt &&
+      normalizeKind(item.kind) === "record" &&
+      item.reminderAt &&
+      String(item.reminderAt).slice(0, 10) <= today
+  );
+
+  if (!due.length || !today) return { shouldNotify: false, overdue: 0, dueToday: 0, titles: [] };
+  if (notifiedThrough && String(notifiedThrough) >= String(today)) {
+    return { shouldNotify: false, overdue: 0, dueToday: 0, titles: [] };
+  }
+
+  // Overdue first, then by date: the notification can only name a few, and the
+  // ones that slipped matter more than the one that just came up.
+  due.sort((a, b) => String(a.reminderAt).localeCompare(String(b.reminderAt)));
+
+  return {
+    shouldNotify: true,
+    overdue: due.filter((i) => String(i.reminderAt).slice(0, 10) < today).length,
+    dueToday: due.filter((i) => String(i.reminderAt).slice(0, 10) === today).length,
+    total: due.length,
+    titles: due.slice(0, 3).map((i) => i.title || ""),
   };
 }
 

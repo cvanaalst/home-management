@@ -55,6 +55,7 @@ import {
   makeId, makeRecord, hydrateRecord, normalizeType, TYPES, DEFAULT_TYPE, SORT_FIELDS,
   KINDS, DEFAULT_KIND, normalizeKind, EVENT_TYPES, DEFAULT_EVENT_TYPE, normalizeEventType,
   RECURRENCE_UNITS, normalizeRecurrence, normalizeAmount,
+  nextOccurrence, completeReminder, dueNotification,
   versionKey, versionKeyRange, VERSION_KEEP, STORE_VERSIONS,
   normalizeSearchText, buildHaystack, stripTrackingParams, normalizeUrl,
   queryItemSet, makeComparator,
@@ -1513,6 +1514,129 @@ assertDeepEqual(normalizeRecurrence({ every: "year", interval: "x" }), { every: 
   "an unparseable interval falls back to 1 rather than NaN");
 assertTrue(RECURRENCE_UNITS.includes("quarter"), "quarterly exists — boiler services and water meters");
 
+group("db.js · nextOccurrence — the plain cases");
+
+const YEARLY = { every: "year", interval: 1 };
+const MONTHLY = { every: "month", interval: 1 };
+const QUARTERLY = { every: "quarter", interval: 1 };
+
+assertEqual(nextOccurrence("2026-03-12", YEARLY, "2026-03-12"), "2027-03-12",
+  "STRICTLY after: today's occurrence, having just been done, is not the next one");
+assertEqual(nextOccurrence("2026-03-12", YEARLY, "2026-03-11"), "2026-03-12",
+  "the day before, the next one is today");
+assertEqual(nextOccurrence("2026-03-12", MONTHLY, "2026-03-12"), "2026-04-12", "monthly steps a month");
+assertEqual(nextOccurrence("2026-03-12", QUARTERLY, "2026-03-12"), "2026-06-12", "a quarter is three months");
+assertEqual(nextOccurrence("2026-03-12", { every: "week", interval: 1 }, "2026-03-12"), "2026-03-19",
+  "a week is seven days");
+assertEqual(nextOccurrence("2026-03-12", { every: "day", interval: 1 }, "2026-03-12"), "2026-03-13",
+  "daily steps a day");
+assertEqual(nextOccurrence("2026-03-12", { every: "month", interval: 6 }, "2026-03-12"), "2026-09-12",
+  "an interval of six months is honoured");
+assertEqual(nextOccurrence("2026-12-20", MONTHLY, "2026-12-20"), "2027-01-20",
+  "December rolls into the next year");
+
+assertEqual(nextOccurrence("2026-03-12", null, "2026-03-12"), null, "no rule, no next date");
+assertEqual(nextOccurrence(null, YEARLY, "2026-03-12"), null, "no anchor, no next date");
+assertEqual(nextOccurrence("2026-03-12", YEARLY, null), null, "no reference day, no next date");
+assertEqual(nextOccurrence("nonsense", YEARLY, "2026-03-12"), null, "an unparseable anchor gives null");
+assertEqual(nextOccurrence("2026-02-30", YEARLY, "2026-03-12"), null,
+  "30 February is not a date and must not be coerced into one");
+assertEqual(nextOccurrence("2026-13-01", YEARLY, "2026-03-12"), null, "month 13 is refused");
+
+group("db.js · nextOccurrence — month-end, where this normally goes wrong");
+
+// The trap: clamping is lossy, so stepping one month at a time from the
+// clamped RESULT walks the date backwards for good. 31 Jan must not become a
+// permanent 28th.
+assertEqual(nextOccurrence("2026-01-31", MONTHLY, "2026-01-31"), "2026-02-28",
+  "31 January plus a month clamps to 28 February — there is no 31st");
+assertEqual(nextOccurrence("2026-01-31", MONTHLY, "2026-02-28"), "2026-03-31",
+  "…and the NEXT one springs back to the 31st rather than staying on the 28th");
+assertEqual(nextOccurrence("2026-01-31", MONTHLY, "2026-03-31"), "2026-04-30",
+  "April has 30 days, so it clamps again");
+assertEqual(nextOccurrence("2026-01-31", MONTHLY, "2026-04-30"), "2026-05-31",
+  "…and springs back again — the anchor day is never lost");
+assertEqual(nextOccurrence("2026-01-31", MONTHLY, "2026-11-30"), "2026-12-31",
+  "still on the 31st eleven months later, which iterative clamping would have destroyed");
+
+assertEqual(nextOccurrence("2026-01-30", MONTHLY, "2026-01-30"), "2026-02-28",
+  "the 30th clamps in February too");
+assertEqual(nextOccurrence("2026-03-31", QUARTERLY, "2026-03-31"), "2026-06-30",
+  "quarterly from 31 March lands on 30 June");
+assertEqual(nextOccurrence("2026-03-31", QUARTERLY, "2026-06-30"), "2026-09-30",
+  "…then 30 September");
+assertEqual(nextOccurrence("2026-03-31", QUARTERLY, "2026-09-30"), "2026-12-31",
+  "…and back to the 31st in December");
+
+// Leap years.
+assertEqual(nextOccurrence("2024-02-29", YEARLY, "2024-02-29"), "2025-02-28",
+  "29 February clamps to the 28th in a common year");
+assertEqual(nextOccurrence("2024-02-29", YEARLY, "2027-06-01"), "2028-02-29",
+  "…and returns to the 29th at the next leap year");
+assertEqual(nextOccurrence("2026-02-28", YEARLY, "2027-06-01"), "2028-02-28",
+  "a plain 28 February stays the 28th in a leap year — it does not drift to the 29th");
+
+group("db.js · nextOccurrence — overdue rolls to the next FUTURE occurrence");
+
+assertEqual(nextOccurrence("2020-03-12", YEARLY, "2026-08-06"), "2027-03-12",
+  "an annual service missed for six years is due on its own anniversary, not a year from today");
+assertEqual(nextOccurrence("2020-03-12", YEARLY, "2026-01-01"), "2026-03-12",
+  "…and if this year's has not passed yet, that is the answer");
+assertEqual(nextOccurrence("2026-03-12", YEARLY, "2030-03-12"), "2031-03-12",
+  "landing exactly on an occurrence still moves past it");
+assertEqual(nextOccurrence("2020-01-01", { every: "day", interval: 1 }, "2030-01-01"), "2030-01-02",
+  "a daily reminder a decade stale resolves without walking 3,650 steps");
+assertEqual(nextOccurrence("2020-01-31", MONTHLY, "2026-08-06"), "2026-08-31",
+  "six years of month-end clamping still lands on the 31st");
+assertEqual(nextOccurrence("2026-08-06", YEARLY, "2020-01-01"), "2026-08-06",
+  "an anchor in the future is itself the next occurrence");
+
+group("db.js · completeReminder");
+
+{
+  const yearly = fx({ id: "a", reminderAt: "2026-03-12", recurrence: { every: "year", interval: 1 } });
+  const done = completeReminder(yearly, "2026-03-14");
+  assertEqual(done.reminderAt, "2027-03-12", "a recurring reminder rolls forward from its anchor");
+  assertEqual(done.recurred, true, "…and says so");
+}
+{
+  const once = fx({ id: "b", reminderAt: "2026-03-12", recurrence: null });
+  const done = completeReminder(once, "2026-03-14");
+  assertEqual(done.reminderAt, null, "a one-off reminder is cleared rather than repeated");
+  assertEqual(done.recurred, false, "…and says so");
+}
+{
+  const none = fx({ id: "c", reminderAt: null, recurrence: { every: "year", interval: 1 } });
+  const done = completeReminder(none, "2026-03-14");
+  assertEqual(done.reminderAt, null, "a rule with no date to anchor it has nothing to advance");
+  assertEqual(done.recurred, false, "…and does not claim to have recurred");
+}
+assertDeepEqual(completeReminder(null, "2026-03-14"), { reminderAt: null, recurred: false },
+  "a missing record does not throw");
+
+// Doing a job EARLY has to move it on, or the button looks broken.
+{
+  const early = fx({ id: "e", reminderAt: "2026-08-31", recurrence: { every: "month", interval: 1 } });
+  const done = completeReminder(early, "2026-08-06");
+  assertEqual(done.reminderAt, "2026-09-30",
+    "a service due on the 31st and done on the 6th advances past the 31st, not back onto it");
+}
+{
+  const early = fx({ id: "e2", reminderAt: "2027-03-12", recurrence: { every: "year", interval: 1 } });
+  assertEqual(completeReminder(early, "2026-08-06").reminderAt, "2028-03-12",
+    "a year early still advances a whole year from the SCHEDULED date");
+}
+{
+  const late = fx({ id: "l", reminderAt: "2020-03-12", recurrence: { every: "year", interval: 1 } });
+  assertEqual(completeReminder(late, "2026-08-06").reminderAt, "2027-03-12",
+    "…while an overdue one still measures from today, never handing back a past date");
+}
+{
+  const onTheDay = fx({ id: "d", reminderAt: "2026-08-06", recurrence: { every: "month", interval: 1 } });
+  assertEqual(completeReminder(onTheDay, "2026-08-06").reminderAt, "2026-09-06",
+    "done on the day itself steps exactly one interval");
+}
+
 group("db.js · normalizeAmount");
 
 assertEqual(normalizeAmount(null), null, "null has no amount");
@@ -1858,6 +1982,58 @@ assertEqual(
   const records = bucketItemsByWeek(items, 2, { field: "createdAt", today: "2026-04-08", kind: "record" });
   assertEqual(all[1].count, 2, "without a kind the chart counts everything");
   assertEqual(records[1].count, 1, "the insights chart asks for records, matching the tiles above it");
+}
+
+group("db.js · dueNotification (catch-up on open)");
+
+{
+  const items = [
+    fx({ id: "late", title: "CV-ketel", reminderAt: "2026-07-01" }),
+    fx({ id: "today", title: "Verzekering", reminderAt: "2026-08-06" }),
+    fx({ id: "later", title: "APK", reminderAt: "2026-12-01" }),
+    fx({ id: "none", title: "Router" }),
+  ];
+  const plan = dueNotification(items, "2026-08-06", null);
+  assertTrue(plan.shouldNotify, "something overdue or due today is worth saying");
+  assertEqual(plan.overdue, 1, "one is overdue");
+  assertEqual(plan.dueToday, 1, "one is due today");
+  assertEqual(plan.total, 2, "the future one is not due yet and is not counted");
+  assertDeepEqual(plan.titles, ["CV-ketel", "Verzekering"],
+    "the oldest comes first — what slipped matters more than what just came up");
+}
+{
+  // Telling someone the same thing every launch is how an app gets muted.
+  const items = [fx({ id: "a", title: "X", reminderAt: "2026-07-01" })];
+  assertEqual(dueNotification(items, "2026-08-06", "2026-08-06").shouldNotify, false,
+    "already spoken up today — stay quiet");
+  assertEqual(dueNotification(items, "2026-08-06", "2026-08-05").shouldNotify, true,
+    "…but a new day earns one notification");
+  assertEqual(dueNotification(items, "2026-08-06", "2026-09-01").shouldNotify, false,
+    "a clock that went backwards must not restart the nagging");
+}
+{
+  assertEqual(dueNotification([], "2026-08-06", null).shouldNotify, false, "nothing due, nothing said");
+  assertEqual(dueNotification(null, "2026-08-06", null).shouldNotify, false, "a null set does not throw");
+  assertEqual(
+    dueNotification([fx({ id: "a", reminderAt: "2026-12-01" })], "2026-08-06", null).shouldNotify,
+    false,
+    "a reminder months away is not a reason to interrupt anyone"
+  );
+}
+{
+  const dead = fx({ id: "d", title: "Weg", reminderAt: "2026-07-01",
+                    deletedAt: "2026-07-02T00:00:00.000Z" });
+  const event = fx({ id: "e", kind: "event", title: "Onderhoud", reminderAt: "2026-07-01" });
+  assertEqual(dueNotification([dead, event], "2026-08-06", null).shouldNotify, false,
+    "a deleted record and an event are both silent — one is gone, the other already happened");
+}
+{
+  const many = ["a", "b", "c", "d", "e"].map((id, i) =>
+    fx({ id, title: `Item ${i}`, reminderAt: "2026-07-0" + (i + 1) })
+  );
+  const plan = dueNotification(many, "2026-08-06", null);
+  assertEqual(plan.total, 5, "all five are counted");
+  assertEqual(plan.titles.length, 3, "…but only three are named — a notification is not a list view");
 }
 
 group("db.js · weekStart / bucketItemsByWeek");

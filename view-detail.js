@@ -38,6 +38,10 @@ import {
   makeFullImage,
   normalizeUrl,
   reminderTypesInUse,
+  RECURRENCE_UNITS,
+  normalizeRecurrence,
+  nextOccurrence,
+  completeReminder,
   EVENT_TYPES,
   DEFAULT_EVENT_TYPE,
   computeBacklinks,
@@ -282,6 +286,31 @@ function buildReminder() {
   typeLabelEl.dataset.i18n = "field.reminderType";
   typeCell.append(typeLabelEl, el.reminderType, el.reminderTypeList);
 
+  // ── Recurrence ─────────────────────────────────────────────────────────
+  // Two controls, not a rule builder: a unit and a count. Boiler service,
+  // chimney sweep, insurance renewal and meter readings are all "every N of
+  // something", and anything that genuinely is not fits a plain date.
+  el.recurrence = document.createElement("select");
+  el.recurrence.className = "input input--select";
+  el.recurrence.setAttribute("aria-label", t("field.recurrence"));
+
+  el.interval = document.createElement("input");
+  el.interval.type = "number";
+  el.interval.min = "1";
+  el.interval.max = "99";
+  el.interval.className = "input input--narrow";
+  el.interval.setAttribute("aria-label", t("field.recurrence.interval"));
+
+  const repeatCell = document.createElement("div");
+  repeatCell.className = "detail__cell detail__cell--stack";
+  const repeatLabel = document.createElement("span");
+  repeatLabel.className = "field__label";
+  repeatLabel.dataset.i18n = "field.recurrence";
+  const repeatRow = document.createElement("div");
+  repeatRow.className = "detail__row";
+  repeatRow.append(el.recurrence, el.interval);
+  repeatCell.append(repeatLabel, repeatRow);
+
   const hint = document.createElement("p");
   hint.className = "field__hint edit-only";
   hint.dataset.i18n = "field.reminderType.hint";
@@ -289,8 +318,19 @@ function buildReminder() {
   el.reminderBadge = document.createElement("span");
   el.reminderBadge.className = "reminder";
 
-  row.append(dateCell, typeCell);
-  wrap.append(el.reminderBadge, row, hint);
+  // "Done" is the whole point of recurrence: it advances the date AND writes
+  // the maintenance event, so the timeline fills itself from work you were
+  // going to do anyway rather than from a second round of typing.
+  el.reminderDone = document.createElement("button");
+  el.reminderDone.type = "button";
+  el.reminderDone.className = "btn btn--primary btn--small edit-only";
+  el.reminderDone.dataset.i18n = "field.reminder.done";
+
+  el.recurrenceNext = document.createElement("p");
+  el.recurrenceNext.className = "field__hint";
+
+  row.append(dateCell, typeCell, repeatCell);
+  wrap.append(el.reminderBadge, row, hint, el.recurrenceNext, el.reminderDone);
   return wrap;
 }
 
@@ -450,10 +490,24 @@ function bindEvents() {
   el.reminderClear.addEventListener("click", () => {
     el.reminderAt.value = "";
     el.reminderType.value = "";
+    el.recurrence.value = "";
     paintReminderBadge();
+    paintRecurrence();
     markDirty();
   });
-  el.reminderAt.addEventListener("change", paintReminderBadge);
+  el.reminderAt.addEventListener("change", () => {
+    paintReminderBadge();
+    paintRecurrence();
+  });
+  el.recurrence.addEventListener("change", () => {
+    paintRecurrence();
+    markDirty();
+  });
+  el.interval.addEventListener("input", () => {
+    paintRecurrence();
+    markDirty();
+  });
+  el.reminderDone.addEventListener("click", markReminderDone);
 
   el.tabWrite.addEventListener("click", () => setPreview(false));
   el.tabPreview.addEventListener("click", () => setPreview(true));
@@ -600,6 +654,12 @@ async function paint() {
   el.comment.value = current.comment;
   el.reminderAt.value = current.reminderAt || "";
   el.reminderType.value = current.reminderType || "";
+  el.recurrence.innerHTML =
+    `<option value="">${t("recurrence.none")}</option>` +
+    RECURRENCE_UNITS.map((unit) => `<option value="${unit}">${t(`recurrence.${unit}`)}</option>`).join("");
+  el.recurrence.value = current.recurrence ? current.recurrence.every : "";
+  el.interval.value = current.recurrence ? String(current.recurrence.interval) : "1";
+
   el.occurredAt.value = current.occurredAt || "";
   el.amount.value = typeof current.amount === "number" ? String(current.amount) : "";
   el.eventType.innerHTML = EVENT_TYPES.map(
@@ -618,6 +678,7 @@ async function paint() {
   paintTypeBadge();
   paintStamps();
   paintReminderBadge();
+  paintRecurrence();
   paintPin();
   paintLinks();
   await paintAttachments();
@@ -645,6 +706,8 @@ function applyLockState() {
   }
   el.amount.readOnly = locked;
   el.reminderAt.disabled = locked;
+  el.recurrence.disabled = locked;
+  el.interval.disabled = locked;
   el.occurredAt.disabled = locked;
   el.eventType.disabled = locked;
   el.type.disabled = locked;
@@ -678,6 +741,108 @@ function paintReminderBadge() {
   el.reminderBadge.className = `reminder reminder--${reminderTone(days)}`;
   el.reminderBadge.innerHTML = icon("bell", { size: 14 });
   el.reminderBadge.append(document.createTextNode(reminderLabel(days)));
+}
+
+/** The recurrence controls as a rule, or null. */
+function readRecurrence() {
+  if (!el.recurrence.value) return null;
+  return normalizeRecurrence({ every: el.recurrence.value, interval: Number(el.interval.value) });
+}
+
+/**
+ * Show the interval box only when something repeats, preview the next date,
+ * and offer "Done" only when there is a reminder to finish.
+ */
+function paintRecurrence() {
+  const hasDate = !!el.reminderAt.value;
+  const rule = readRecurrence();
+
+  el.recurrence.parentElement.parentElement.hidden = !hasDate;
+  el.interval.hidden = !rule;
+  el.reminderDone.hidden = !hasDate || isEvent();
+
+  if (!hasDate || !rule) {
+    el.recurrenceNext.hidden = true;
+    return;
+  }
+
+  // Show where "Done" would land. Recurrence is the one field whose effect is
+  // invisible until months later, so stating it up front is the difference
+  // between a rule someone trusts and one they re-check every time.
+  //
+  // Through completeReminder(), not nextOccurrence() directly, so the preview
+  // and the button can never disagree about a job done early.
+  const { reminderAt: next } = completeReminder(
+    { reminderAt: el.reminderAt.value, recurrence: rule },
+    todayIso()
+  );
+  el.recurrenceNext.hidden = !next;
+  if (next) {
+    el.recurrenceNext.textContent = t("recurrence.next", {
+      date: formatDate(next, state.lang),
+    });
+  }
+}
+
+/**
+ * Mark a reminder done: advance it, and write the event that proves it happened.
+ *
+ * The event is the reason this button exists. A timeline nobody fills is worth
+ * nothing, and this is the one moment where the user is already telling the app
+ * that maintenance occurred — so it is the one place the record can be created
+ * without asking for anything extra.
+ */
+async function markReminderDone() {
+  if (!current || isDraft || state.locked) return;
+  const dateWas = el.reminderAt.value;
+  if (!dateWas) return;
+
+  const rule = readRecurrence();
+  const today = todayIso();
+  const { reminderAt, recurred } = completeReminder(
+    { reminderAt: dateWas, recurrence: rule },
+    today
+  );
+
+  try {
+    const event = makeRecord({
+      kind: "event",
+      type: current.type,
+      eventType: "maintenance",
+      // The reminder type is what the user already called this job — "jaarlijks
+      // onderhoud" — so it makes a better title than anything invented here.
+      title: current.reminderType.trim() || current.title || t("field.reminder"),
+      occurredAt: today,
+      linkedIds: [current.id],
+      body: t("recurrence.loggedFrom", { title: current.title || "" }).trim(),
+    });
+    await putItem(event);
+
+    current.reminderAt = reminderAt;
+    current.recurrence = reminderAt ? rule : null;
+    const saved = await putItem(current);
+    current = saved;
+
+    el.reminderAt.value = reminderAt || "";
+    if (!reminderAt) el.recurrence.value = "";
+    baseline = snapshot();
+    paintStamps();
+    paintReminderBadge();
+    paintRecurrence();
+    paintDirty();
+    await paintEventPanels(await getAllItems());
+
+    toast(
+      recurred
+        ? t("recurrence.doneNext", { date: formatDate(reminderAt, state.lang) })
+        : t("recurrence.doneOnce"),
+      "success",
+      { duration: 2600 }
+    );
+    callbacks.onChanged();
+  } catch {
+    toast(t("error.saveFailed"), "error");
+  }
 }
 
 function paintPin() {
@@ -993,6 +1158,8 @@ function snapshot() {
     comment: el.comment.value,
     reminderAt: el.reminderAt.value,
     reminderType: el.reminderType.value,
+    recurrence: el.recurrence.value,
+    interval: el.recurrence.value ? el.interval.value : "",
     occurredAt: el.occurredAt.value,
     eventType: el.eventType.value,
     amount: el.amount.value,
@@ -1141,6 +1308,8 @@ async function save() {
   current.reminderAt = el.reminderAt.value || null;
   // A reminder type without a date is meaningless, so it goes with it.
   current.reminderType = current.reminderAt ? el.reminderType.value.trim() : "";
+  // A rule with no date to anchor it can never fire, so it goes with the date.
+  current.recurrence = current.reminderAt ? readRecurrence() : null;
   if (isEvent()) {
     current.occurredAt = el.occurredAt.value || null;
     current.eventType = el.eventType.value;

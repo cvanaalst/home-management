@@ -51,6 +51,55 @@ import { confirmDialog, trapFocus } from "./ui.js";
 const $ = (id) => document.getElementById(id);
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Reminder notifications (§8.16)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Permission is asked from a BUTTON, never on load.
+ *
+ * A permission prompt on first paint is the fastest way to get denied forever:
+ * the browser remembers a refusal, and there is no second chance to explain
+ * what the app wanted it for.
+ */
+function notificationsSupported() {
+  return typeof Notification !== "undefined" && "serviceWorker" in navigator;
+}
+
+export function paintNotify() {
+  const panel = $("notify-panel");
+  const hint = $("notify-hint");
+  const button = $("btn-notify-enable");
+  if (!panel) return;
+
+  if (!notificationsSupported()) {
+    hint.textContent = t("notify.unsupported");
+    button.hidden = true;
+    return;
+  }
+
+  const permission = Notification.permission;
+  button.hidden = permission !== "default";
+  button.textContent = t("notify.enable");
+
+  if (permission === "granted") hint.textContent = t("notify.granted");
+  else if (permission === "denied") hint.textContent = t("notify.denied");
+  else hint.textContent = t("notify.hint");
+}
+
+function bindNotify() {
+  const button = $("btn-notify-enable");
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    try {
+      await Notification.requestPermission();
+    } catch {
+      /* an older browser with the callback-only form; the repaint still runs */
+    }
+    paintNotify();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Install hint (§6 polish)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -171,6 +220,7 @@ export function initSettingsView(handlers = {}) {
 
   bindSync();
   bindInstall();
+  bindNotify();
   $("btn-storage-refresh").addEventListener("click", paintStorage);
   $("btn-export-json").addEventListener("click", exportJson);
   $("btn-export-csv").addEventListener("click", exportCsv);
@@ -596,5 +646,6 @@ export function refreshSettingsLanguage() {
   paintStorage();
   paintSync();
   paintInstall();
+  paintNotify();
   if (!$("view-help").hidden) renderHelp();
 }

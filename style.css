@@ -1483,6 +1483,21 @@ body:not(.is-locked) .detail__title {
   gap: 4px;
 }
 
+/* A row of controls INSIDE a stacked cell. It must not inherit .detail__cell's
+   `flex: 1 1 200px`, which in a column axis means "grow vertically" and left
+   the repeat controls floating in the middle of a tall empty box. */
+.detail__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+.detail__row > .input:not(.input--narrow) {
+  flex: 1;
+  min-width: 0;
+}
+
 .detail__cell .input {
   flex: 1;
   min-width: 0;
@@ -2430,6 +2445,11 @@ body:not(.is-locked) .detail__title {
 
 .timeline__list--compact .timeline__row {
   padding: var(--space-2) var(--space-3);
+}
+
+.input--narrow {
+  width: 5.5rem;
+  flex: 0 0 auto;
 }
 
 .detail__history-summary {
