@@ -1,10 +1,17 @@
 /**
  * sw.js — service worker (BLUEPRINT §4, §13.13, §15.2).
  *
- * ── The one rule that breaks offline silently ──────────────────────────────
- * Every new module MUST be added to PRECACHE below AND CACHE_VERSION bumped.
- * Forgetting this breaks offline for EXISTING installs only, which is
- * invisible in development. Check it on every release.
+ * ── Two rules that break a release silently ────────────────────────────────
+ * 1. Every new module MUST be added to PRECACHE below AND CACHE_VERSION
+ *    bumped. Forgetting this breaks offline for EXISTING installs only, which
+ *    is invisible in development. Check it on every release.
+ * 2. Every precache fetch MUST bypass the HTTP cache — see the install
+ *    handler. Without it a release can be half old, and the halves are chosen
+ *    by which files happened to be in the browser cache.
+ *
+ * Both failures share a shape worth remembering: they are invisible on the
+ * machine that built the release and only appear on a device that already had
+ * the app.
  *
  * Strategy:
  *   • navigations  → the cached document for THAT path if we have one, else the
@@ -18,7 +25,7 @@
  * wonder why the suite stopped updating.
  */
 
-const CACHE_VERSION = "hms-v24";
+const CACHE_VERSION = "hms-v25";
 
 const PRECACHE = [
   "./",
@@ -63,9 +70,28 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE_VERSION);
-      // addAll is atomic: one 404 and the whole install fails loudly, which is
-      // what we want — a half-populated cache is worse than none.
-      await cache.addAll(PRECACHE);
+
+      // `cache: "reload"` is load-bearing, not a precaution.
+      //
+      // A plain addAll() fetches through the HTTP cache. GitHub Pages serves
+      // this app with `cache-control: max-age=600`, so any file the browser
+      // happened to fetch in the last ten minutes is handed over from that
+      // cache and frozen into the brand-new version cache — where it then
+      // stays until the NEXT release, because a version cache is written once.
+      //
+      // The result is a build that is genuinely half old: a fresh index.html
+      // referencing a stale i18n.js, so the new tab renders its raw key
+      // "nav.timeline" and its icon silently goes missing. Observed on iOS
+      // Safari and Chrome after the build-24 deploy.
+      //
+      // Reloading forces every precache fetch past the HTTP cache to the
+      // network, which is the only way to guarantee one version cache holds
+      // one version of the app.
+      const requests = PRECACHE.map((url) => new Request(url, { cache: "reload" }));
+
+      // Still addAll, so it stays atomic: one 404 fails the whole install
+      // loudly, and a half-populated cache is worse than none.
+      await cache.addAll(requests);
     })()
   );
   // NOTE: no skipWaiting() here, deliberately.
@@ -143,10 +169,16 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
-/** Re-fetch a precached document and store it under its own key. */
+/**
+ * Re-fetch a precached document and store it under its own key.
+ *
+ * Reloading for the same reason install does: this writes straight into the
+ * live version cache, so pulling a ten-minute-old index.html out of the HTTP
+ * cache here would overwrite a good shell with a stale one.
+ */
 async function refresh(request) {
   try {
-    const response = await fetch(request);
+    const response = await fetch(request.url, { cache: "reload", credentials: "same-origin" });
     if (response.ok && response.type === "basic") {
       const cache = await caches.open(CACHE_VERSION);
       await cache.put(request, response.clone());
