@@ -299,6 +299,80 @@ function showDueRecords() {
   navigate("list");
 }
 
+/**
+ * Paste a file, an image or text anywhere on the overview to start a record.
+ *
+ * This is the iOS answer to Share Target, which Safari does not implement and
+ * shows no sign of. Pasting works everywhere, needs no manifest support and no
+ * permission, and covers the case that actually matters: a PDF or a photo of a
+ * meter that is already on the clipboard.
+ */
+/**
+ * A file opened with the app from the desktop file manager.
+ *
+ * Chromium only, and only once installed — Safari has no equivalent, which is
+ * why paste-to-create carries this on iOS. Harmless where unsupported: the
+ * queue simply does not exist.
+ */
+function bindFileHandler() {
+  if (!("launchQueue" in window) || !window.launchQueue) return;
+  window.launchQueue.setConsumer(async (params) => {
+    if (!params || !params.files || !params.files.length) return;
+    try {
+      const files = [];
+      for (const handle of params.files) files.push(await handle.getFile());
+      if (!files.length) return;
+      draftSeed = { type: "document", kind: "record", files };
+      await navigate("detail", { id: DRAFT_ID });
+      toast(t("paste.file"), "info", { duration: 2200 });
+    } catch {
+      /* the handle went stale; nothing useful to say about it */
+    }
+  });
+}
+
+function bindPasteToCreate() {
+  document.addEventListener("paste", (event) => {
+    // Never steal a paste aimed at a field the user is typing in.
+    const target = event.target;
+    if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
+      return;
+    }
+    if (state.locked) return;
+    // Only from the two list views; pasting inside an open record means
+    // something else entirely.
+    if (state.currentView !== "list" && state.currentView !== "timeline") return;
+
+    const data = event.clipboardData;
+    if (!data) return;
+
+    const files = [...(data.files || [])];
+    const text = data.getData("text/plain").trim();
+    if (!files.length && !text) return;
+
+    event.preventDefault();
+    pasteIntoDraft({ files, text });
+  });
+}
+
+async function pasteIntoDraft({ files, text }) {
+  // A pasted URL is a link, a pasted paragraph is a note, and the first line of
+  // either makes a better title than "Untitled".
+  const firstLine = text.split("\n")[0].trim();
+  const looksLikeUrl = /^https?:\/\/\S+$/i.test(firstLine);
+
+  draftSeed = {
+    type: files.length ? "document" : "various",
+    kind: "record",
+    title: looksLikeUrl ? "" : firstLine.slice(0, 120),
+    body: looksLikeUrl || !text ? "" : text,
+    url: looksLikeUrl ? firstLine : "",
+    files,
+  };
+  await navigate("detail", { id: DRAFT_ID });
+  toast(t(files.length ? "paste.file" : "paste.text"), "info", { duration: 2200 });
+}
+
 function bindChrome() {
   $("btn-back").addEventListener("click", () => history.back());
 
@@ -667,6 +741,8 @@ async function boot() {
   paintIcons();
   syncThemeColorMeta();
   bindChrome();
+  bindPasteToCreate();
+  bindFileHandler();
   bindConnectivity();
   registerServiceWorker();
 

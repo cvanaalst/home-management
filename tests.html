@@ -57,6 +57,7 @@ import {
   RECURRENCE_UNITS, normalizeRecurrence, normalizeAmount,
   nextOccurrence, completeReminder, dueNotification,
   versionKey, versionKeyRange, VERSION_KEEP, STORE_VERSIONS,
+  diffRecords, applyVersion, DIFFABLE_FIELDS, getVersions, clearVersions,
   normalizeSearchText, buildHaystack, stripTrackingParams, normalizeUrl,
   queryItemSet, makeComparator,
   computeStats, weekStart, bucketItemsByWeek, sortTagsByRecency,
@@ -915,6 +916,8 @@ for (const eventType of EVENT_TYPES) {
     `the ${eventType} event type resolves to a glyph that exists`);
 }
 assertEqual(eventIcon("nonsense"), "event-other", "an unknown event type falls back to the catch-all");
+assertTrue(ICON_NAMES.includes("event-purchase"), "the purchase event type has its own glyph");
+assertTrue(!ICON_NAMES.includes("event-reading"), "the retired reading glyph is gone");
 assertEqual(eventIcon(""), "event-other", "…and so does an empty one");
 assertEqual(eventIcon("maintenance"), "event-maintenance", "a known one maps straight through");
 assertTrue(ICON_NAMES.includes("timeline"), "the timeline tab has a glyph");
@@ -1491,6 +1494,68 @@ assertTrue(EVENT_TYPES.includes(DEFAULT_EVENT_TYPE), "the fallback is itself a v
     "hydration adds the new fields WITHOUT touching updatedAt, so it can never win a merge");
   assertEqual(hydrated.kind, "record", "…while still supplying the new kind");
 }
+
+group("db.js · the reading -> purchase swap");
+
+assertTrue(EVENT_TYPES.includes("purchase"), "purchase is an event type");
+assertTrue(!EVENT_TYPES.includes("reading"), "reading is retired");
+assertEqual(normalizeEventType("purchase", "event"), "purchase", "a purchase survives");
+assertEqual(normalizeEventType("reading", "event"), "other",
+  "an event already filed as a meter reading lands in the catch-all — relabelling it a " +
+  "PURCHASE would put something untrue in the house's history");
+{
+  const stored = hydrateRecord({ id: "old", kind: "event", eventType: "reading",
+                                 title: "Meterstand elektra" });
+  assertEqual(stored.eventType, "other", "the migration runs at read time, not by rewriting");
+  assertEqual(stored.title, "Meterstand elektra", "…and nothing else about the event is touched");
+}
+
+group("db.js · diffRecords");
+
+{
+  const before = fx({ id: "a", title: "Oud", body: "tekst", tags: ["x"] });
+  const after = { ...before, title: "Nieuw", tags: ["x", "y"] };
+  assertDeepEqual(diffRecords(before, after), ["title", "tags"],
+    "only the fields that actually differ, in form order");
+}
+assertDeepEqual(diffRecords(fx({ id: "a" }), fx({ id: "a" })), [],
+  "two identical records differ in nothing");
+assertDeepEqual(diffRecords(null, fx({ id: "a" })), [], "a missing side yields no diff");
+{
+  const a = fx({ id: "a", updatedAt: "2026-01-01T00:00:00.000Z" });
+  const b = { ...a, updatedAt: "2026-09-09T00:00:00.000Z" };
+  assertDeepEqual(diffRecords(a, b), [],
+    "envelope timestamps are NOT diffed — nobody needs telling that updatedAt moved");
+}
+{
+  const a = fx({ id: "a", recurrence: { every: "year", interval: 1 } });
+  const b = { ...a, recurrence: { every: "year", interval: 2 } };
+  assertDeepEqual(diffRecords(a, b), ["recurrence"], "nested rules are compared by value");
+}
+{
+  const a = fx({ id: "a", links: [{ id: "1", label: "L", url: "https://x.example" }] });
+  const b = { ...a, links: [] };
+  assertDeepEqual(diffRecords(a, b), ["links"], "arrays are compared by value, not by reference");
+}
+assertTrue(!DIFFABLE_FIELDS.includes("id"), "the id is never diffable");
+assertTrue(!DIFFABLE_FIELDS.includes("deletedAt"), "…nor is the tombstone flag");
+
+group("db.js · applyVersion");
+
+{
+  const current = fx({ id: "keep", title: "Nu", body: "nieuw", createdAt: "2026-01-01T00:00:00.000Z" });
+  const past = fx({ id: "keep", title: "Toen", body: "oud", createdAt: "2026-01-01T00:00:00.000Z" });
+  const restored = applyVersion(current, past);
+
+  assertEqual(restored.title, "Toen", "the old title comes back");
+  assertEqual(restored.body, "oud", "…and the old body");
+  assertEqual(restored.id, "keep",
+    "the id is KEPT — a new one would orphan every event and link pointing at this record");
+  assertEqual(restored.createdAt, current.createdAt, "the creation date is not rewritten");
+  assertTrue(restored !== current, "a new object is returned rather than the current one mutated");
+  assertEqual(current.title, "Nu", "…and the current record is left untouched");
+}
+assertEqual(applyVersion(null, fx({ id: "a" })), null, "no current record, nothing to apply to");
 
 group("db.js · normalizeRecurrence");
 
@@ -2315,6 +2380,70 @@ group("db.js · IndexedDB — the v2 upgrade");
   const found = await queryItems({ kind: "event" });
   assertTrue(found.results.some((r) => r.id === event.id), "and the async query finds it by kind");
 }
+
+group("db.js · IndexedDB — revision history");
+
+{
+  await clearItems();
+  const first = await putItem(makeRecord({ id: "v1", title: "Eerste", body: "a" }));
+  assertDeepEqual(await getVersions("v1"), [],
+    "the FIRST save has no past, so it stores no revision");
+
+  await putItem({ ...first, title: "Tweede" });
+  const after = await getVersions("v1");
+  assertEqual(after.length, 1, "the second save snapshots what it replaced");
+  assertEqual(after[0].record.title, "Eerste", "…and the snapshot holds the OLD title, not the new");
+}
+{
+  // Six more saves on top: only the newest five survive.
+  for (const n of [3, 4, 5, 6, 7, 8]) {
+    const now = await getItem("v1");
+    await putItem({ ...now, title: `Versie ${n}` });
+  }
+  const kept = await getVersions("v1");
+  assertEqual(kept.length, VERSION_KEEP, "never more than five revisions per record");
+  assertEqual(kept[0].record.title, "Versie 7", "newest first");
+  assertTrue(kept[0].at >= kept[kept.length - 1].at, "…and ordered by time throughout");
+  assertTrue(
+    kept.every((k) => k.record.id === "v1"),
+    "a cursor over one record's range never picks up another record's history"
+  );
+}
+{
+  // Two records must not share a history.
+  await putItem(makeRecord({ id: "v2", title: "Ander" }));
+  await putItem({ ...(await getItem("v2")), title: "Ander gewijzigd" });
+  assertEqual((await getVersions("v2")).length, 1, "the second record has its own single revision");
+  assertEqual((await getVersions("v1")).length, VERSION_KEEP, "…and the first still has five");
+}
+{
+  await clearVersions("v2");
+  assertDeepEqual(await getVersions("v2"), [], "history can be wiped for one record");
+  assertEqual((await getVersions("v1")).length, VERSION_KEEP, "…without touching another's");
+}
+{
+  // The conflict-loss capture: a sync overwriting a local record must record
+  // what it replaced, because last-write-wins leaves no other trace.
+  await clearItems();
+  await putItem(makeRecord({ id: "c1", title: "Lokaal", updatedAt: "2026-01-01T00:00:00.000Z" }));
+  await clearVersions("c1");
+
+  await putItems([{ ...(await getItem("c1")), title: "Van Drive",
+                    updatedAt: "2026-02-01T00:00:00.000Z" }]);
+  const lost = await getVersions("c1");
+  assertEqual(lost.length, 1, "a sync that overwrote a record left a snapshot behind");
+  assertEqual(lost[0].record.title, "Lokaal", "…holding the edit that would otherwise have vanished");
+}
+{
+  // …but an unchanged row must NOT be snapshotted, or a sync writing back the
+  // whole merged set would evict the revisions worth keeping.
+  const unchanged = await getItem("c1");
+  await clearVersions("c1");
+  await putItems([unchanged]);
+  assertDeepEqual(await getVersions("c1"), [],
+    "re-writing an identical record stores nothing — a full sync must not flush the history");
+}
+await clearItems();
 
 group("db.js · IndexedDB — media");
 

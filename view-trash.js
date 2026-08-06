@@ -17,6 +17,7 @@ import {
   cloneMedia,
   deleteMedia,
   makeId,
+  clearVersions,
 } from "./db.js";
 import { planRestore, planPurge } from "./merge.js";
 import { toast, confirmDialog, formatDateTime } from "./ui.js";
@@ -149,6 +150,11 @@ async function purgeItem(item) {
   // The bare tombstone stays so the deletion keeps propagating; only the
   // content is wiped. The Drive copy goes on the next sync, by id prefix.
   await putItem(planPurge(item), { touch: false });
+
+  // …and the local revision history goes with it. "Delete forever" that leaves
+  // every field recoverable one panel away is not delete forever. Done AFTER
+  // the write, because that write snapshots the pre-purge copy itself.
+  await clearVersions(item.id);
 
   toast(t("trash.purged"), "info");
   await renderTrash();

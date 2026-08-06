@@ -102,11 +102,24 @@ export const EVENT_TYPES = [
   "payment", // premium, invoice, call-out charge
   "incident", // failure, outage, leak, damage
   "change", // added, moved, reconfigured
-  "reading", // meter reading, measurement
+  "purchase", // bought, replaced, ordered
   "other",
 ];
 
 export const DEFAULT_EVENT_TYPE = "other";
+
+/**
+ * Event types this app has used before, mapped to their replacement.
+ *
+ * "reading" (meter readings) was swapped for "purchase". They are unrelated,
+ * so anything already filed as a reading lands in the catch-all rather than
+ * being relabelled — calling a meter reading a purchase would put a statement
+ * in the house's history that is simply untrue. Applied at READ time, like
+ * LEGACY_TYPES above, so nothing is rewritten on upgrade (§6).
+ */
+const LEGACY_EVENT_TYPES = {
+  reading: "other",
+};
 
 /**
  * Resolve an event type. PURE.
@@ -117,7 +130,8 @@ export const DEFAULT_EVENT_TYPE = "other";
  */
 export function normalizeEventType(value, kind = DEFAULT_KIND) {
   if (normalizeKind(kind) !== "event") return "";
-  return EVENT_TYPES.includes(value) ? value : DEFAULT_EVENT_TYPE;
+  if (EVENT_TYPES.includes(value)) return value;
+  return LEGACY_EVENT_TYPES[value] || DEFAULT_EVENT_TYPE;
 }
 
 /** How a reminder repeats. See nextOccurrence() for the arithmetic. */
@@ -264,6 +278,60 @@ export function completeReminder(record, todayIso) {
 
   const next = nextOccurrence(record.reminderAt, record.recurrence, from);
   return next ? { reminderAt: next, recurred: true } : { reminderAt: null, recurred: false };
+}
+
+/**
+ * The fields a user can change, in the order the form shows them.
+ * Drives the revision diff, so it deliberately excludes the envelope: nobody
+ * needs telling that `updatedAt` changed between two revisions.
+ */
+export const DIFFABLE_FIELDS = [
+  "title",
+  "type",
+  "body",
+  "comment",
+  "tags",
+  "pinned",
+  "reminderAt",
+  "reminderType",
+  "recurrence",
+  "occurredAt",
+  "eventType",
+  "amount",
+  "links",
+  "attachments",
+  "linkedIds",
+];
+
+/**
+ * Which of DIFFABLE_FIELDS differ between two records. PURE.
+ *
+ * Names only, not values: the point on a revision row is "what would restoring
+ * this change?", answered at a glance. Comparing by JSON keeps arrays and the
+ * recurrence object honest without a per-field comparator.
+ */
+export function diffRecords(a, b) {
+  if (!a || !b) return [];
+  return DIFFABLE_FIELDS.filter(
+    (field) => JSON.stringify(a[field] ?? null) !== JSON.stringify(b[field] ?? null)
+  );
+}
+
+/**
+ * A past revision applied over the current record. PURE.
+ *
+ * Returns a NEW record, keeping the current id and creation date and every
+ * envelope field. Restoring a revision is an ordinary edit, not the trash's
+ * restore-under-a-new-id — the record never stopped existing, so giving it a
+ * new identity would orphan every event and link pointing at it.
+ */
+export function applyVersion(current, version) {
+  if (!current || !version) return current;
+  const restored = { ...current };
+  for (const field of DIFFABLE_FIELDS) {
+    if (field in version) restored[field] = version[field];
+  }
+  return restored;
 }
 
 /** Resolve a stored amount to a finite number or null. PURE. */
@@ -1095,10 +1163,73 @@ export async function putItem(item, { touch = true } = {}) {
   if (!item || !item.id) throw new Error("putItem: record needs an id");
   const record = hydrateRecord(item);
   if (touch) record.updatedAt = new Date().toISOString();
-  await withStore(STORE_ITEMS, "readwrite", (tx) =>
-    req(tx.objectStore(STORE_ITEMS).put(record))
-  );
+
+  // One transaction over both stores: the snapshot of what is being replaced
+  // and the replacement itself either both land or neither does. Two
+  // transactions could lose the old copy and keep the new one, which is the
+  // one outcome revision history exists to prevent.
+  await withStore([STORE_ITEMS, STORE_VERSIONS], "readwrite", async (tx) => {
+    const items = tx.objectStore(STORE_ITEMS);
+    const previous = await req(items.get(record.id));
+    if (previous) await snapshot(tx, previous);
+    await req(items.put(record));
+  });
   return record;
+}
+
+/**
+ * Store one revision of a record and drop anything past VERSION_KEEP.
+ *
+ * Takes the transaction rather than opening its own — see putItem().
+ */
+async function snapshot(tx, record) {
+  const store = tx.objectStore(STORE_VERSIONS);
+  const [lower, upper] = versionKeyRange(record.id);
+  const existing = await req(store.getAllKeys(IDBKeyRange.bound(lower, upper)));
+
+  // Sequence numbers only ever go up, so the next one comes from the last key
+  // rather than from the count — deleting old revisions must not let a new one
+  // reuse a number and sort itself into the middle of the history.
+  const last = existing.length ? existing[existing.length - 1] : null;
+  const nextSeq = last ? Number(String(last).split("#")[1]) + 1 : 0;
+
+  await req(
+    store.put({
+      key: versionKey(record.id, nextSeq),
+      recordId: record.id,
+      at: new Date().toISOString(),
+      // The record as it was. Blobs live in the media store and are untouched,
+      // so a revision costs a few hundred bytes rather than a few megabytes.
+      record,
+    })
+  );
+
+  const doomed = existing.slice(0, Math.max(0, existing.length + 1 - VERSION_KEEP));
+  for (const key of doomed) await req(store.delete(key));
+}
+
+/** Up to VERSION_KEEP past revisions of one record, newest first. */
+export async function getVersions(recordId) {
+  if (!recordId) return [];
+  const [lower, upper] = versionKeyRange(recordId);
+  const rows = await withStore(STORE_VERSIONS, "readonly", (tx) =>
+    req(tx.objectStore(STORE_VERSIONS).getAll(IDBKeyRange.bound(lower, upper)))
+  );
+  return (rows || [])
+    .map((row) => ({ ...row, record: hydrateRecord(row.record) }))
+    .filter((row) => row.record)
+    .reverse();
+}
+
+/** Drop every stored revision of a record. Used when it is purged (§8.5). */
+export async function clearVersions(recordId) {
+  if (!recordId) return;
+  const [lower, upper] = versionKeyRange(recordId);
+  await withStore(STORE_VERSIONS, "readwrite", async (tx) => {
+    const store = tx.objectStore(STORE_VERSIONS);
+    const keys = await req(store.getAllKeys(IDBKeyRange.bound(lower, upper)));
+    for (const key of keys) await req(store.delete(key));
+  });
 }
 
 /**
@@ -1111,9 +1242,26 @@ export async function putItems(items) {
     .filter((raw) => raw && raw.id)
     .map(hydrateRecord)
     .filter(Boolean);
-  await withStore(STORE_ITEMS, "readwrite", (tx) => {
+
+  await withStore([STORE_ITEMS, STORE_VERSIONS], "readwrite", async (tx) => {
     const store = tx.objectStore(STORE_ITEMS);
-    return Promise.all(records.map((r) => req(store.put(r))));
+    for (const record of records) {
+      const previous = await req(store.get(record.id));
+
+      // This is the case revision history was built for. Last-write-wins
+      // discards the loser whole, so an edit made here and an edit made on the
+      // phone resolve by timestamp and one of them vanishes with no trace.
+      // Snapshotting what a sync is about to overwrite is the only record that
+      // it ever existed.
+      //
+      // Only when the timestamp actually moved: a sync writes back the entire
+      // merged set every time, and snapshotting unchanged rows would fill the
+      // history with copies of itself and evict the revisions worth keeping.
+      if (previous && previous.updatedAt !== record.updatedAt) {
+        await snapshot(tx, previous);
+      }
+      await req(store.put(record));
+    }
   });
   return records.length;
 }

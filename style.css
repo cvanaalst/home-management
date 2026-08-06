@@ -194,7 +194,7 @@
   --event-payment: #e8c05e;
   --event-incident: #f2726a;
   --event-change: #7fa8e8;
-  --event-reading: #b79ce8;
+  --event-purchase: #b79ce8;
   --event-other: #93a3b4;
 }
 
@@ -212,7 +212,7 @@
   --event-payment: #8a6510;
   --event-incident: #c0392b;
   --event-change: #1e5fa8;
-  --event-reading: #6d3fd4;
+  --event-purchase: #6d3fd4;
   --event-other: #5c6b7a;
 }
 
@@ -2450,6 +2450,43 @@ body:not(.is-locked) .detail__title {
 .input--narrow {
   width: 5.5rem;
   flex: 0 0 auto;
+}
+
+.version-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.version {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.version__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.version__when {
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.version__summary {
+  color: var(--text-secondary);
+  font-size: var(--step--1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .detail__history-summary {

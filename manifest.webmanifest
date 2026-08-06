@@ -12,6 +12,19 @@
   "lang": "nl",
   "dir": "ltr",
   "categories": ["productivity", "utilities"],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/pdf": [".pdf"],
+        "image/*": [".png", ".jpg", ".jpeg", ".webp", ".heic"]
+      }
+    }
+  ],
+  "shortcuts": [
+    { "name": "Nieuw item", "url": "./#/add" },
+    { "name": "Tijdlijn", "url": "./#/timeline" }
+  ],
   "icons": [
     {
       "src": "icons/icon-192.png",

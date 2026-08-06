@@ -97,9 +97,9 @@ const GLYPHS = {
   // Two arrows swapping — something replaced something else.
   "event-change":
     '<path d="M4 8h13M13.5 4.5L17 8l-3.5 3.5"/><path d="M20 16H7M10.5 12.5L7 16l3.5 3.5"/>',
-  // A dial with a needle — a meter being read.
-  "event-reading":
-    '<path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="M12 17l4-4.5"/><path d="M3.5 17h3M17.5 17h3"/>',
+  // A shopping bag.
+  "event-purchase":
+    '<path d="M4.5 7.5h15l-1.2 12.5H5.7z"/><path d="M8.8 10V6.2a3.2 3.2 0 0 1 6.4 0V10"/>',
   // A dot on a line — something happened, unclassified.
   "event-other": '<path d="M3 12h5M16 12h5"/><circle cx="12" cy="12" r="3.2"/>',
 };

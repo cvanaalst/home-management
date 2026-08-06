@@ -44,6 +44,10 @@ import {
   completeReminder,
   EVENT_TYPES,
   DEFAULT_EVENT_TYPE,
+  getVersions,
+  diffRecords,
+  applyVersion,
+  VERSION_KEEP,
   computeBacklinks,
 } from "./db.js";
 import {
@@ -105,7 +109,8 @@ export function initDetailView(handlers = {}) {
   root.className = "view__body detail";
 
   root.append(buildHead(), buildEvent(), buildReminder(), buildTags(), buildBody(), buildComment());
-  root.append(buildLinks(), buildAttachments(), buildRelations(), buildHistory(), buildActions());
+  root.append(buildLinks(), buildAttachments(), buildRelations(), buildHistory());
+  root.append(buildVersions(), buildActions());
 
   tagWidget = createTagInput(el.tagHost, { onChange: markDirty });
   bindEvents();
@@ -446,6 +451,28 @@ function buildRelations() {
   return wrap;
 }
 
+/**
+ * The last few saves of this record, newest first.
+ *
+ * Local only and never synced (see versionKey in db.js): last-write-wins
+ * discards the losing record whole, so history kept inside it would vanish
+ * together with the edit you wanted it for.
+ */
+function buildVersions() {
+  const wrap = section("versions.section", "detail__section--versions");
+  el.versionsPanel = wrap;
+
+  const hint = document.createElement("p");
+  hint.className = "field__hint";
+  hint.textContent = t("versions.hint", { count: VERSION_KEEP });
+
+  el.versions = document.createElement("div");
+  el.versions.className = "version-list";
+
+  wrap.append(hint, el.versions);
+  return wrap;
+}
+
 function buildActions() {
   const bar = document.createElement("div");
   bar.className = "detail__actions edit-only";
@@ -564,11 +591,23 @@ export async function openDraft(type, seed = {}) {
     linkedIds: seed.linkedIds || [],
     occurredAt: seed.kind === "event" ? todayIso() : null,
     eventType: seed.eventType || (seed.kind === "event" ? "maintenance" : ""),
+    title: seed.title || "",
+    body: seed.body || "",
   });
   isDraft = true;
   pendingMedia.clear();
+
+  // A pasted or opened file goes through the ordinary attach path, so it gets
+  // the same size guard, thumbnail and pending-blob handling as one picked
+  // from the file dialog. Nothing about a draft is special except that its
+  // blobs wait in memory until the first Save.
+  if (seed.url) current.links = [{ id: makeId(), label: "", url: normalizeUrl(seed.url) }];
+  for (const file of seed.files || []) await attachFile(file);
+
   await paint();
-  el.title.focus();
+  // A pasted record already has a title; the body is where the work continues.
+  if (seed.title || seed.files?.length) el.body.focus();
+  else el.title.focus();
   return true;
 }
 
@@ -684,6 +723,7 @@ async function paint() {
   await paintAttachments();
   paintRelations(items);
   paintEventPanels(items);
+  await paintVersions();
   setPreview(state.locked);
 
   baseline = snapshot();
@@ -831,6 +871,7 @@ async function markReminderDone() {
     paintRecurrence();
     paintDirty();
     await paintEventPanels(await getAllItems());
+    await paintVersions();
 
     toast(
       recurred
@@ -1101,6 +1142,93 @@ function historyRow(entry) {
   return row;
 }
 
+/**
+ * Fill the revision list.
+ *
+ * Hidden on a draft — a record that has never been saved has no past — and on
+ * anything with no revisions yet, rather than showing an empty panel that
+ * invites the question "is this broken?".
+ */
+async function paintVersions() {
+  if (!el.versionsPanel) return;
+  if (isDraft || !current) {
+    el.versionsPanel.hidden = true;
+    return;
+  }
+
+  const versions = await getVersions(current.id);
+  el.versionsPanel.hidden = versions.length === 0;
+  if (!versions.length) return;
+
+  el.versions.textContent = "";
+  for (const entry of versions) el.versions.append(versionRow(entry));
+}
+
+function versionRow(entry) {
+  const row = document.createElement("div");
+  row.className = "version";
+
+  const text = document.createElement("div");
+  text.className = "version__text";
+
+  const when = document.createElement("span");
+  when.className = "version__when";
+  when.textContent = formatDateTime(entry.at, state.lang);
+
+  const changed = diffRecords(entry.record, current);
+  const summary = document.createElement("span");
+  summary.className = "version__summary";
+  summary.textContent = changed.length
+    ? t("versions.changed", { fields: changed.map((f) => t(`versions.field.${f}`)).join(", ") })
+    : t("versions.identical");
+
+  text.append(when, summary);
+  row.append(text);
+
+  // Nothing to restore when a revision matches what is already on screen, and
+  // offering a button that provably does nothing is worse than offering none.
+  if (changed.length) {
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "btn btn--ghost btn--small edit-only";
+    restore.textContent = t("versions.restore");
+    restore.addEventListener("click", () => restoreVersion(entry));
+    row.append(restore);
+  }
+  return row;
+}
+
+/**
+ * Put a past revision back.
+ *
+ * An ordinary edit under the SAME id, not the trash's restore-under-a-new-id:
+ * the record never stopped existing, and giving it a new identity would orphan
+ * every event and link pointing at it. The current state is snapshotted on the
+ * way past by putItem, so restoring is itself undoable.
+ */
+async function restoreVersion(entry) {
+  if (!current || state.locked) return;
+  const changed = diffRecords(entry.record, current);
+  const ok = await confirmDialog(
+    t("versions.restore.confirm", {
+      when: formatDateTime(entry.at, state.lang),
+      fields: changed.map((f) => t(`versions.field.${f}`)).join(", "),
+    }),
+    t("versions.restore")
+  );
+  if (!ok) return;
+
+  try {
+    const saved = await putItem(applyVersion(current, entry.record));
+    current = saved;
+    await paint();
+    toast(t("versions.restored"), "success", { duration: 2400 });
+    callbacks.onChanged();
+  } catch {
+    toast(t("error.saveFailed"), "error");
+  }
+}
+
 /** An event shows what happened where a record shows its type. */
 function paintEventBadge() {
   if (!isEvent()) return;
@@ -1331,6 +1459,10 @@ async function save() {
     baseline = snapshot();
     paintStamps();
     paintDirty();
+    // The save just created a revision, so the panel below is now out of date.
+    // Every other write path goes through paint(); this one deliberately does
+    // not, to avoid rebuilding the form under the user's cursor.
+    await paintVersions();
     if (state.locked) setPreview(true);
     toast(t(wasDraft ? "toast.created" : "toast.saved"), "success", { duration: 2000 });
     callbacks.onChanged();
