@@ -36,6 +36,7 @@
 import {
   escapeHtml, formatDate, formatDateTime, daysUntil, todayIso, formatBytes,
   reminderTone, reminderLabel, isPreviewable, previewKind, replaceExtension,
+  formatMonth, formatAmount,
 } from "./ui.js";
 import { renderMarkdown, markdownToPlain, safeUrl } from "./markdown.js";
 import {
@@ -67,7 +68,7 @@ import {
   getStats, getStorageEstimate,
 } from "./db.js";
 import { t, typeLabel, eventTypeLabel, kindLabel, _dictKeys } from "./i18n.js";
-import { icon, typeIcon, ICON_NAMES } from "./icons.js";
+import { icon, typeIcon, eventIcon, ICON_NAMES } from "./icons.js";
 import { state, setLang } from "./state.js";
 import { VERSION, versionLine } from "./version.js";
 
@@ -881,6 +882,42 @@ assertDeepEqual(
 assertEqual(typeof BACKUP_KEEP, "number", "BACKUP_KEEP is exported so sync.js and the tests agree");
 assertTrue(BACKUP_KEEP > 0, "keeping zero backups would defeat the point");
 
+group("ui.js · formatMonth");
+
+assertEqual(formatMonth("2026-08-14", "nl"), "augustus 2026", "a full date reduces to its month");
+assertEqual(formatMonth("2026-08", "nl"), "augustus 2026", "a bare YYYY-MM works too");
+assertEqual(formatMonth("2026-08", "en"), "August 2026", "…in English");
+assertEqual(formatMonth("2026-01-01", "nl"), "januari 2026", "January does not slip to the year before");
+assertEqual(formatMonth("2026-12-31", "nl"), "december 2026", "…and December does not slip forward");
+assertEqual(formatMonth(""), "", "empty gives empty");
+assertEqual(formatMonth(null), "", "null gives empty");
+assertEqual(formatMonth("nonsense"), "", "unparseable gives empty, never 'Invalid Date'");
+assertEqual(formatMonth("2026"), "", "a bare year is not a month");
+
+group("ui.js · formatAmount");
+
+assertTrue(formatAmount(89.5, "nl").includes("89,50"), "Dutch uses a decimal comma and two places");
+assertTrue(formatAmount(89.5, "en").includes("89.50"), "English uses a decimal point");
+assertTrue(formatAmount(89.5, "nl").includes("€"), "the currency symbol is shown");
+assertEqual(formatAmount(0, "nl").includes("0,00"), true, "zero formats as an amount, not as empty");
+assertEqual(formatAmount(null), "", "null has no amount to show");
+assertEqual(formatAmount(undefined), "", "undefined has no amount to show");
+assertEqual(formatAmount("89.50"), "", "a STRING is refused — formatting one would hide a data bug");
+assertEqual(formatAmount(NaN), "", "NaN shows nothing rather than 'NaN'");
+assertEqual(formatAmount(Infinity), "", "Infinity shows nothing");
+assertTrue(formatAmount(-25, "nl").includes("25"), "a refund still renders");
+
+group("icons.js · eventIcon");
+
+for (const eventType of EVENT_TYPES) {
+  assertTrue(ICON_NAMES.includes(eventIcon(eventType)),
+    `the ${eventType} event type resolves to a glyph that exists`);
+}
+assertEqual(eventIcon("nonsense"), "event-other", "an unknown event type falls back to the catch-all");
+assertEqual(eventIcon(""), "event-other", "…and so does an empty one");
+assertEqual(eventIcon("maintenance"), "event-maintenance", "a known one maps straight through");
+assertTrue(ICON_NAMES.includes("timeline"), "the timeline tab has a glyph");
+
 // ═══════════════════════════════════════════════════════════════════════════
 // sync.js — the payload guard (§7)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -965,6 +1002,35 @@ assertEqual(
 );
 assertEqual(csvCell("mid=dle"), "mid=dle", "an = that is not leading is left alone");
 
+group("report.js · events in the export");
+
+{
+  const stub = (key) => key;
+  const event = fx({
+    id: "e", kind: "event", type: "devices", eventType: "payment",
+    title: "Jaarlijkse premie", occurredAt: "2026-04-01", amount: 340.5,
+  });
+  const row = recordToRow(event, { t: stub, lang: "nl" });
+  assertEqual(row.kind, "kind.event", "the row says which axis it is on");
+  assertEqual(row.occurredAt, "2026-04-01", "the date it happened is exported raw and sortable");
+  assertEqual(row.eventType, "eventType.payment", "the event type is labelled");
+  assertEqual(row.amount, "340.5",
+    "the amount is RAW — a spreadsheet has to be able to SUM the column, and '€ 340,50' is text");
+  assertEqual(row.type, "type.devices", "an event keeps its subject's type");
+
+  const record = recordToRow(fx({ id: "r", type: "devices", title: "CV-ketel" }), { t: stub });
+  assertEqual(record.kind, "kind.record", "a record says so too");
+  assertEqual(record.eventType, "", "…and carries no event type");
+  assertEqual(record.amount, "", "…and no amount");
+  assertEqual(record.occurredAt, "", "…and no occurrence date");
+}
+{
+  // Zero is a real amount. If it exported as "" a free repair would look like
+  // a missing figure rather than a repair that cost nothing.
+  const free = recordToRow(fx({ id: "f", kind: "event", amount: 0 }), { t: (k) => k });
+  assertEqual(free.amount, "0", "a zero amount exports as 0, not as blank");
+}
+
 group("report.js · toCsv");
 
 {
@@ -983,7 +1049,7 @@ group("report.js · toCsv");
   assertEqual(lines.length, 3, "a header plus one line per LIVE record");
   assertTrue(!csv.includes("Weg"), "tombstones are excluded from the CSV");
   assertEqual(lines[0].split(CSV_SEPARATOR).length, CSV_COLUMNS.length, "the header has every column");
-  assertTrue(lines[0].startsWith("csv.type"), "headers come from the dictionary");
+  assertTrue(lines[0].startsWith("csv.kind"), "headers come from the dictionary");
   assertTrue(lines[1].includes("Alarm"), "the title is present");
   assertTrue(lines[1].includes("code, veiligheid"), "tags are joined readably");
   assertTrue(lines[1].includes("https://a.example"), "the link URL is present");

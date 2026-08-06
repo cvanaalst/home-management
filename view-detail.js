@@ -22,8 +22,8 @@
  */
 
 import { state } from "./state.js";
-import { t, typeLabel } from "./i18n.js";
-import { icon } from "./icons.js";
+import { t, typeLabel, eventTypeLabel } from "./i18n.js";
+import { icon, eventIcon } from "./icons.js";
 import {
   TYPES,
   makeId,
@@ -38,6 +38,8 @@ import {
   makeFullImage,
   normalizeUrl,
   reminderTypesInUse,
+  EVENT_TYPES,
+  DEFAULT_EVENT_TYPE,
   computeBacklinks,
 } from "./db.js";
 import {
@@ -48,6 +50,7 @@ import {
   formatDate,
   formatDateTime,
   formatBytes,
+  formatAmount,
   daysUntil,
   todayIso,
   reminderTone,
@@ -63,6 +66,7 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const $ = (id) => document.getElementById(id);
 
 let callbacks = {
+  onLogEvent: () => {},
   onChanged: () => {},
   onDelete: () => {},
   onSaved: () => {},
@@ -96,8 +100,8 @@ export function initDetailView(handlers = {}) {
   root.textContent = "";
   root.className = "view__body detail";
 
-  root.append(buildHead(), buildReminder(), buildTags(), buildBody(), buildComment());
-  root.append(buildLinks(), buildAttachments(), buildRelations(), buildActions());
+  root.append(buildHead(), buildEvent(), buildReminder(), buildTags(), buildBody(), buildComment());
+  root.append(buildLinks(), buildAttachments(), buildRelations(), buildHistory(), buildActions());
 
   tagWidget = createTagInput(el.tagHost, { onChange: markDirty });
   bindEvents();
@@ -157,6 +161,86 @@ function buildHead() {
 
   head.append(topRow, titleRow, el.stamps);
   return head;
+}
+
+/**
+ * The three fields only an event has (§5). Hidden outright on a record — an
+ * empty "what happened" box on the boiler's own page would just be a question
+ * nobody asked.
+ */
+function buildEvent() {
+  const wrap = section("event.section", "detail__section--event");
+  el.eventPanel = wrap;
+
+  const row = document.createElement("div");
+  row.className = "detail__grid";
+
+  const dateCell = document.createElement("div");
+  dateCell.className = "detail__cell detail__cell--stack";
+  const dateLabel = document.createElement("span");
+  dateLabel.className = "field__label";
+  dateLabel.dataset.i18n = "event.occurredAt";
+  el.occurredAt = document.createElement("input");
+  el.occurredAt.type = "date";
+  el.occurredAt.className = "input";
+  el.occurredAt.setAttribute("aria-label", t("event.occurredAt"));
+  dateCell.append(dateLabel, el.occurredAt);
+
+  const typeCell = document.createElement("div");
+  typeCell.className = "detail__cell detail__cell--stack";
+  const typeLabelEl = document.createElement("span");
+  typeLabelEl.className = "field__label";
+  typeLabelEl.dataset.i18n = "eventType.label";
+  el.eventType = document.createElement("select");
+  el.eventType.className = "input";
+  el.eventType.setAttribute("aria-label", t("eventType.label"));
+  typeCell.append(typeLabelEl, el.eventType);
+
+  const amountCell = document.createElement("div");
+  amountCell.className = "detail__cell detail__cell--stack";
+  const amountLabel = document.createElement("span");
+  amountLabel.className = "field__label";
+  amountLabel.dataset.i18n = "event.amount";
+  el.amount = document.createElement("input");
+  el.amount.type = "number";
+  el.amount.step = "0.01";
+  el.amount.className = "input";
+  el.amount.dataset.i18nPlaceholder = "event.amount.placeholder";
+  el.amount.setAttribute("aria-label", t("event.amount"));
+  amountCell.append(amountLabel, el.amount);
+
+  const hint = document.createElement("p");
+  hint.className = "field__hint edit-only";
+  hint.dataset.i18n = "event.hint";
+
+  row.append(dateCell, typeCell, amountCell);
+  wrap.append(row, hint);
+  return wrap;
+}
+
+/**
+ * What has happened to THIS record — the reverse of `linkedIds`, filtered to
+ * events. Reading a router's page and seeing three outages since March is the
+ * entire point of the event log; a chip row of titles would not carry the
+ * dates, and dates are what makes a history worth having.
+ */
+function buildHistory() {
+  const wrap = section("history.section", "detail__section--history");
+  el.historyPanel = wrap;
+
+  el.historySummary = document.createElement("p");
+  el.historySummary.className = "detail__history-summary";
+
+  el.history = document.createElement("div");
+  el.history.className = "timeline__list timeline__list--compact";
+
+  el.historyAdd = document.createElement("button");
+  el.historyAdd.type = "button";
+  el.historyAdd.className = "btn btn--ghost edit-only";
+  el.historyAdd.dataset.i18n = "history.add";
+
+  wrap.append(el.historySummary, el.history, el.historyAdd);
+  return wrap;
 }
 
 function buildReminder() {
@@ -347,9 +431,14 @@ function buildActions() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function bindEvents() {
-  for (const field of [el.title, el.body, el.comment, el.reminderAt, el.reminderType]) {
+  for (const field of [el.title, el.body, el.comment, el.reminderAt, el.reminderType,
+                       el.occurredAt, el.amount]) {
     field.addEventListener("input", markDirty);
   }
+  el.eventType.addEventListener("change", () => {
+    paintEventBadge();
+    markDirty();
+  });
   el.type.addEventListener("change", () => {
     if (current) current.type = el.type.value;
     paintTypeBadge();
@@ -379,6 +468,7 @@ function bindEvents() {
   el.fileInput.addEventListener("change", onFilesPicked);
 
   el.linkedAdd.addEventListener("click", addRelation);
+  el.historyAdd.addEventListener("click", () => callbacks.onLogEvent(current));
   el.pin.addEventListener("click", togglePin);
   el.print.addEventListener("click", () => callbacks.onPrint(current));
   el.save.addEventListener("click", save);
@@ -403,14 +493,32 @@ export async function openRecord(id) {
   return true;
 }
 
-/** Open a brand-new unsaved record of the given type. */
-export async function openDraft(type) {
-  current = makeRecord({ type });
+/**
+ * Open a brand-new unsaved record or event.
+ *
+ * `seed` carries everything the caller already knows: the kind, and for an
+ * event logged from a record, the subject it is about and that subject's type.
+ * An event inherits its subject's type on purpose — that is what keeps the
+ * router's outage on the router's colour and inside the "devices" chip.
+ */
+export async function openDraft(type, seed = {}) {
+  current = makeRecord({
+    type,
+    kind: seed.kind || "record",
+    linkedIds: seed.linkedIds || [],
+    occurredAt: seed.kind === "event" ? todayIso() : null,
+    eventType: seed.eventType || (seed.kind === "event" ? "maintenance" : ""),
+  });
   isDraft = true;
   pendingMedia.clear();
   await paint();
   el.title.focus();
   return true;
+}
+
+/** True when the open row is an event, which changes what the form shows. */
+function isEvent() {
+  return !!current && current.kind === "event";
 }
 
 /** Is there an unsaved change the user would lose by leaving? */
@@ -490,6 +598,12 @@ async function paint() {
   el.comment.value = current.comment;
   el.reminderAt.value = current.reminderAt || "";
   el.reminderType.value = current.reminderType || "";
+  el.occurredAt.value = current.occurredAt || "";
+  el.amount.value = typeof current.amount === "number" ? String(current.amount) : "";
+  el.eventType.innerHTML = EVENT_TYPES.map(
+    (value) => `<option value="${value}">${eventTypeLabel(value)}</option>`
+  ).join("");
+  el.eventType.value = current.eventType || DEFAULT_EVENT_TYPE;
   tagWidget.setTags(current.tags);
 
   const items = await getAllItems();
@@ -506,6 +620,7 @@ async function paint() {
   paintLinks();
   await paintAttachments();
   paintRelations(items);
+  paintEventPanels(items);
   setPreview(state.locked);
 
   baseline = snapshot();
@@ -526,13 +641,17 @@ function applyLockState() {
   for (const field of [el.title, el.body, el.comment, el.reminderType]) {
     field.readOnly = locked;
   }
+  el.amount.readOnly = locked;
   el.reminderAt.disabled = locked;
+  el.occurredAt.disabled = locked;
+  el.eventType.disabled = locked;
   el.type.disabled = locked;
   el.pin.disabled = locked;
   // el.print stays enabled: reading a record aloud on paper is not an edit.
 }
 
 function paintTypeBadge() {
+  if (isEvent()) return paintEventBadge();
   const type = el.type.value || current.type;
   el.typeBadge.innerHTML = icon(`type-${type}`, { size: 18 });
   el.typeBadge.append(document.createTextNode(typeLabel(type)));
@@ -710,7 +829,7 @@ function paintRelations(items) {
   const byId = new Map(items.map((i) => [i.id, i]));
   el.linked.textContent = "";
   if (!current.linkedIds.length) {
-    el.linked.append(emptyLine("detail.noTags", ""));
+    el.linked.append(emptyLine("detail.noLinked"));
   }
   for (const id of current.linkedIds) {
     const target = byId.get(id);
@@ -723,11 +842,96 @@ function paintRelations(items) {
     );
   }
 
-  const backlinks = computeBacklinks(items, current.id);
+  // Events that point here are NOT chips — they belong to the history panel
+  // below, which can show their dates. Listing them in both places would show
+  // the same thing twice, once stripped of the only detail that matters.
+  const backlinks = computeBacklinks(items, current.id).filter((i) => i.kind !== "event");
   el.backlinksTitle.hidden = backlinks.length === 0;
   el.backlinks.hidden = backlinks.length === 0;
   el.backlinks.textContent = "";
   for (const source of backlinks) el.backlinks.append(relationChip(source, null));
+}
+
+/**
+ * Show or hide the two event panels, and fill the history one.
+ *
+ * The event fields appear only on an event; the history appears only on a
+ * saved record — a draft has no id yet, so nothing can point at it, and
+ * offering "log an event" before the subject exists would produce an orphan.
+ */
+function paintEventPanels(items) {
+  const event = isEvent();
+  el.eventPanel.hidden = !event;
+  paintEventBadge();
+
+  el.historyPanel.hidden = event || isDraft;
+  if (el.historyPanel.hidden) return;
+
+  const history = computeBacklinks(items, current.id)
+    .filter((i) => i.kind === "event")
+    .sort((a, b) => String(b.occurredAt || "").localeCompare(String(a.occurredAt || "")));
+
+  el.history.textContent = "";
+  if (!history.length) {
+    el.history.append(emptyLine("history.empty"));
+    el.historySummary.hidden = true;
+    return;
+  }
+
+  const spent = history
+    .filter((e) => typeof e.amount === "number")
+    .reduce((sum, e) => sum + e.amount, 0);
+  const hasAmounts = history.some((e) => typeof e.amount === "number");
+
+  el.historySummary.hidden = false;
+  el.historySummary.textContent = hasAmounts
+    ? `${t("history.count", { count: history.length })} · ${t("history.total", { amount: formatAmount(spent, state.lang) })}`
+    : t("history.count", { count: history.length });
+
+  for (const entry of history) el.history.append(historyRow(entry));
+}
+
+function historyRow(entry) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "timeline__row";
+  row.style.setProperty("--event-colour", `var(--event-${entry.eventType})`);
+  row.addEventListener("click", () => callbacks.onOpen(entry.id));
+
+  const glyph = document.createElement("span");
+  glyph.className = "timeline__icon";
+  glyph.innerHTML = icon(eventIcon(entry.eventType), { size: 18 });
+
+  const text = document.createElement("span");
+  text.className = "timeline__text";
+  const head = document.createElement("span");
+  head.className = "timeline__title";
+  head.textContent = entry.title || t("timeline.untitled");
+  const meta = document.createElement("span");
+  meta.className = "timeline__meta";
+  meta.textContent = [
+    entry.occurredAt ? formatDate(entry.occurredAt, state.lang) : t("timeline.undated"),
+    eventTypeLabel(entry.eventType),
+  ].join(" · ");
+  text.append(head, meta);
+  row.append(glyph, text);
+
+  if (typeof entry.amount === "number") {
+    const amount = document.createElement("span");
+    amount.className = "timeline__amount";
+    amount.textContent = formatAmount(entry.amount, state.lang);
+    row.append(amount);
+  }
+  return row;
+}
+
+/** An event shows what happened where a record shows its type. */
+function paintEventBadge() {
+  if (!isEvent()) return;
+  const eventType = el.eventType.value || current.eventType || DEFAULT_EVENT_TYPE;
+  el.typeBadge.innerHTML = icon(eventIcon(eventType), { size: 18 });
+  el.typeBadge.append(document.createTextNode(eventTypeLabel(eventType)));
+  el.typeBadge.style.color = `var(--event-${eventType})`;
 }
 
 function relationChip(record, onRemove) {
@@ -778,6 +982,9 @@ function snapshot() {
     comment: el.comment.value,
     reminderAt: el.reminderAt.value,
     reminderType: el.reminderType.value,
+    occurredAt: el.occurredAt.value,
+    eventType: el.eventType.value,
+    amount: el.amount.value,
     tags: tagWidget.getTags(),
   });
 }
@@ -923,6 +1130,11 @@ async function save() {
   current.reminderAt = el.reminderAt.value || null;
   // A reminder type without a date is meaningless, so it goes with it.
   current.reminderType = current.reminderAt ? el.reminderType.value.trim() : "";
+  if (isEvent()) {
+    current.occurredAt = el.occurredAt.value || null;
+    current.eventType = el.eventType.value;
+    current.amount = el.amount.value === "" ? null : Number(el.amount.value);
+  }
   current.tags = tagWidget.getTags();
 
   try {

@@ -59,7 +59,8 @@ export function toJsonExport(records, { build, exportedAt } = {}) {
 export const CSV_SEPARATOR = ";";
 
 export const CSV_COLUMNS = [
-  "type", "title", "tags", "reminderAt", "reminderType", "pinned",
+  "kind", "type", "title", "tags", "occurredAt", "eventType", "amount",
+  "reminderAt", "reminderType", "pinned",
   "comment", "links", "attachments", "body", "createdAt", "updatedAt", "id",
 ];
 
@@ -83,10 +84,17 @@ export function csvCell(value) {
 /** Flatten one record to primitives, in CSV_COLUMNS order. PURE. */
 export function recordToRow(record, { t, lang = "nl" } = {}) {
   const label = t || ((key) => key);
+  const kind = record.kind === "event" ? "event" : "record";
   return {
+    kind: label(`kind.${kind}`),
     type: label(`type.${record.type}`),
     title: record.title,
     tags: (record.tags || []).join(", "),
+    occurredAt: record.occurredAt || "",
+    eventType: kind === "event" ? label(`eventType.${record.eventType}`) : "",
+    // Raw, not formatted: a spreadsheet must be able to SUM this column, and
+    // "€ 89,50" is text. The locale-formatted figure belongs on screen.
+    amount: typeof record.amount === "number" ? String(record.amount) : "",
     reminderAt: record.reminderAt || "",
     reminderType: record.reminderType || "",
     pinned: record.pinned ? "1" : "",

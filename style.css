@@ -189,6 +189,13 @@
   --type-devices: #a78bfa;
   --type-calendar: #f0975a;
   --type-various: #93a3b4;
+
+  --event-maintenance: #6bc79a;
+  --event-payment: #e8c05e;
+  --event-incident: #f2726a;
+  --event-change: #7fa8e8;
+  --event-reading: #b79ce8;
+  --event-other: #93a3b4;
 }
 
 :root[data-theme="light"],
@@ -200,6 +207,13 @@
   --type-devices: #6d3fd4;
   --type-calendar: #b25415;
   --type-various: #5c6b7a;
+
+  --event-maintenance: #1e7a48;
+  --event-payment: #8a6510;
+  --event-incident: #c0392b;
+  --event-change: #1e5fa8;
+  --event-reading: #6d3fd4;
+  --event-other: #5c6b7a;
 }
 
 /* ==========================================================================
@@ -2297,6 +2311,144 @@ body:not(.is-locked) .detail__title {
   .skeleton__line {
     animation: none;
     background: var(--tag-bg);
+  }
+}
+
+/* ==========================================================================
+   12k. Timeline
+   ========================================================================== */
+
+/* The view body owns no padding: .list-controls is sticky and must span the
+   full width, exactly as it does on the overview. */
+.timeline {
+  padding: 0;
+}
+
+.timeline__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding: var(--space-4);
+}
+
+.timeline__summary {
+  color: var(--text-secondary);
+  font-size: var(--step--1);
+}
+
+.timeline__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Month headings, so a decade of entries reads in chapters rather than as one
+   undifferentiated column. Sticky because scrolling a long history without a
+   date in view tells you nothing. */
+.timeline__month {
+  position: sticky;
+  top: var(--space-2);
+  z-index: 1;
+  margin: var(--space-4) 0 var(--space-1);
+  padding: var(--space-1) 0;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-family: var(--font-display);
+  font-size: var(--step--1);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: capitalize;
+}
+
+.timeline__month:first-child {
+  margin-top: 0;
+}
+
+.timeline__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--event-colour, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), transform 0.15s var(--ease);
+}
+
+.timeline__row:hover {
+  background: var(--surface-raised);
+}
+
+.timeline__row:active {
+  transform: scale(0.995);
+}
+
+.timeline__icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--event-colour, var(--text-secondary));
+}
+
+.timeline__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0; /* lets the title ellipsise instead of pushing the amount out */
+  flex: 1 1 auto;
+}
+
+.timeline__title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline__meta {
+  color: var(--text-secondary);
+  font-size: var(--step--1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tabular figures so a column of amounts lines up on the decimal. */
+.timeline__amount {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.timeline__list--compact .timeline__row {
+  padding: var(--space-2) var(--space-3);
+}
+
+.detail__history-summary {
+  color: var(--text-secondary);
+  font-size: var(--step--1);
+  margin-bottom: var(--space-2);
+}
+
+.chip__glyph {
+  display: inline-grid;
+  place-items: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline__row {
+    transition: none;
+  }
+  .timeline__row:active {
+    transform: none;
   }
 }
 

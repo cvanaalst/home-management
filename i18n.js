@@ -24,6 +24,36 @@ const dict = {
     "app.tagline": "Alles over je huis, offline bij de hand",
 
     // ── tabs & navigation ───────────────────────────────────────────────────
+    "nav.timeline": "Tijdlijn",
+    "view.timeline.title": "Tijdlijn",
+
+    // ── the timeline (§4) ───────────────────────────────────────────────────
+    "timeline.count": "{count} van {total}",
+    "timeline.total": "{amount} uitgegeven",
+    "timeline.undated": "Zonder datum",
+    "timeline.untitled": "Naamloze gebeurtenis",
+    "timeline.newestFirst": "Nieuwste eerst",
+    "timeline.oldestFirst": "Oudste eerst",
+    "timeline.empty.title": "Nog niets gebeurd",
+    "timeline.empty.body":
+      "Leg vast wat er in huis gebeurt: onderhoud, storingen, betalingen en wijzigingen. Open een item en kies \u201eGebeurtenis vastleggen\u201d.",
+    "timeline.empty.filtered.title": "Niets gevonden",
+    "timeline.empty.filtered.body": "Geen gebeurtenis voldoet aan deze filters.",
+
+    // ── the event form (§5) ─────────────────────────────────────────────────
+    "event.section": "Wat er gebeurde",
+    "event.occurredAt": "Datum",
+    "event.amount": "Bedrag",
+    "event.amount.placeholder": "bv. 89,50",
+    "event.hint":
+      "De datum is wanneer het gebeurde, niet wanneer je het opschreef. Het bedrag is optioneel en telt mee in de totalen.",
+
+    // ── a record's own history (§5) ─────────────────────────────────────────
+    "history.section": "Geschiedenis",
+    "history.add": "Gebeurtenis vastleggen",
+    "history.empty": "Nog niets vastgelegd voor dit item.",
+    "history.count": "{count} gebeurtenissen",
+    "history.total": "{amount} in totaal",
     "nav.list": "Overzicht",
     "nav.settings": "Instellingen",
     "nav.back": "Terug",
@@ -146,6 +176,7 @@ const dict = {
     "detail.notFound": "Dit item bestaat niet meer.",
     "detail.noBody": "Geen inhoud.",
     "detail.noTags": "Geen labels.",
+    "detail.noLinked": "Geen gekoppelde items.",
     "detail.noLinks": "Geen links.",
     "detail.noAttachments": "Geen bestanden.",
     "detail.newRecord": "Nieuw item",
@@ -257,6 +288,10 @@ const dict = {
     "csv.title": "Titel",
     "csv.tags": "Labels",
     "csv.reminderAt": "Herinnering",
+    "csv.kind": "Soort regel",
+    "csv.occurredAt": "Gebeurd op",
+    "csv.eventType": "Soort gebeurtenis",
+    "csv.amount": "Bedrag",
     "csv.reminderType": "Soort herinnering",
     "csv.pinned": "Vastgezet",
     "csv.comment": "Notitie",
@@ -421,6 +456,36 @@ const dict = {
     "app.tagline": "Everything about your home, offline and to hand",
 
     // ── tabs & navigation ───────────────────────────────────────────────────
+    "nav.timeline": "Timeline",
+    "view.timeline.title": "Timeline",
+
+    // ── the timeline (§4) ───────────────────────────────────────────────────
+    "timeline.count": "{count} of {total}",
+    "timeline.total": "{amount} spent",
+    "timeline.undated": "Undated",
+    "timeline.untitled": "Untitled event",
+    "timeline.newestFirst": "Newest first",
+    "timeline.oldestFirst": "Oldest first",
+    "timeline.empty.title": "Nothing has happened yet",
+    "timeline.empty.body":
+      "Record what happens around the house: maintenance, incidents, payments and changes. Open a record and choose \u201cLog an event\u201d.",
+    "timeline.empty.filtered.title": "Nothing found",
+    "timeline.empty.filtered.body": "No event matches these filters.",
+
+    // ── the event form (§5) ─────────────────────────────────────────────────
+    "event.section": "What happened",
+    "event.occurredAt": "Date",
+    "event.amount": "Amount",
+    "event.amount.placeholder": "e.g. 89.50",
+    "event.hint":
+      "The date is when it happened, not when you wrote it down. The amount is optional and counts towards the totals.",
+
+    // ── a record's own history (§5) ─────────────────────────────────────────
+    "history.section": "History",
+    "history.add": "Log an event",
+    "history.empty": "Nothing recorded for this item yet.",
+    "history.count": "{count} events",
+    "history.total": "{amount} in total",
     "nav.list": "Overview",
     "nav.settings": "Settings",
     "nav.back": "Back",
@@ -543,6 +608,7 @@ const dict = {
     "detail.notFound": "This item no longer exists.",
     "detail.noBody": "No content.",
     "detail.noTags": "No tags.",
+    "detail.noLinked": "No linked items.",
     "detail.noLinks": "No links.",
     "detail.noAttachments": "No files.",
     "detail.newRecord": "New item",
@@ -654,6 +720,10 @@ const dict = {
     "csv.title": "Title",
     "csv.tags": "Tags",
     "csv.reminderAt": "Reminder",
+    "csv.kind": "Row kind",
+    "csv.occurredAt": "Occurred on",
+    "csv.eventType": "Event type",
+    "csv.amount": "Amount",
     "csv.reminderType": "Reminder type",
     "csv.pinned": "Pinned",
     "csv.comment": "Note",

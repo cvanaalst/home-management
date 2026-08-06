@@ -289,6 +289,42 @@ export function formatDateTime(iso, lang = "nl") {
 }
 
 /**
+ * "augustus 2026" / "August 2026", from a "YYYY-MM" or "YYYY-MM-DD" string.
+ * Returns "" for empty or unparseable input.
+ *
+ * Built from an explicit UTC midnight rather than `new Date("2026-08")`, which
+ * some engines read as a local time that can slip into the previous month for
+ * anyone east of Greenwich.
+ */
+export function formatMonth(value, lang = "nl") {
+  const month = String(value || "").slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(month)) return "";
+  const d = new Date(`${month}-01T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(LOCALE[lang] || LOCALE.nl, {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/**
+ * "€ 340,50" / "€340.50". Returns "" for anything that is not a finite number.
+ *
+ * The currency is fixed to EUR rather than made a setting: this app is for one
+ * household, and a per-record currency invites totals that silently add euros
+ * to pounds. If that ever needs to change it should change with an explicit
+ * conversion story, not a dropdown.
+ */
+export function formatAmount(value, lang = "nl") {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "";
+  return value.toLocaleString(LOCALE[lang] || LOCALE.nl, {
+    style: "currency",
+    currency: "EUR",
+  });
+}
+
+/**
  * Whole days from `todayIso` to `dateIso`, both "YYYY-MM-DD".
  * Negative = overdue, 0 = today. PURE, and deliberately date-only: comparing
  * timestamps makes "due today" flip at an arbitrary hour.

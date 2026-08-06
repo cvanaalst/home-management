@@ -80,6 +80,28 @@ const GLYPHS = {
   // Three dots — the catch-all.
   "type-various":
     '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/>',
+
+  // ── the timeline and its six event types ──────────────────────────────────
+  // A clock turning back — what happened, not what is.
+  timeline:
+    '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.4l3.4 2"/>',
+  // A spanner.
+  "event-maintenance":
+    '<path d="M15.6 4.4a4.6 4.6 0 0 0-6 6L4 16v4h4l5.6-5.6a4.6 4.6 0 0 0 6-6l-2.8 2.8-2.6-.6-.6-2.6z"/>',
+  // A banknote.
+  "event-payment":
+    '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 10v4M18 10v4"/>',
+  // A warning triangle — the only glyph in the set that should feel alarming.
+  "event-incident":
+    '<path d="M12 3.8L21.5 20H2.5z"/><path d="M12 10v4.5M12 17.3h.01"/>',
+  // Two arrows swapping — something replaced something else.
+  "event-change":
+    '<path d="M4 8h13M13.5 4.5L17 8l-3.5 3.5"/><path d="M20 16H7M10.5 12.5L7 16l3.5 3.5"/>',
+  // A dial with a needle — a meter being read.
+  "event-reading":
+    '<path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="M12 17l4-4.5"/><path d="M3.5 17h3M17.5 17h3"/>',
+  // A dot on a line — something happened, unclassified.
+  "event-other": '<path d="M3 12h5M16 12h5"/><circle cx="12" cy="12" r="3.2"/>',
 };
 
 /** Every glyph name — used by tests.html to prove nothing references a typo. */
@@ -117,4 +139,9 @@ export function iconEl(name, opts = {}) {
 /** Glyph name for a record type, so callers never build the string themselves. */
 export function typeIcon(type) {
   return GLYPHS[`type-${type}`] ? `type-${type}` : "type-various";
+}
+
+/** Glyph name for an event type, falling back to the catch-all. */
+export function eventIcon(eventType) {
+  return GLYPHS[`event-${eventType}`] ? `event-${eventType}` : "event-other";
 }

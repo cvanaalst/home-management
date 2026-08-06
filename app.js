@@ -49,14 +49,25 @@ import {
 import { initReportView, renderReport } from "./view-report.js";
 import { initTrashView, renderTrash, refreshTrashLanguage } from "./view-trash.js";
 import { initSyncLogView, renderSyncLog, refreshSyncLogLanguage } from "./view-synclog.js";
+import {
+  initTimelineView,
+  renderTimeline,
+  refreshTimelineLanguage,
+} from "./view-timeline.js";
 import { consumeRedirectResult, maybeAutoSync, syncNow } from "./sync.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Routing
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Tab-bar destinations. These REPLACE the history entry (§9). */
-const BASE_TABS = ["list", "settings"];
+/**
+ * Tab-bar destinations. These REPLACE the history entry (§9).
+ *
+ * The timeline sits here rather than behind Settings on purpose: "what happened
+ * to my house" is a peer of "what do I own", not a diagnostic. A feature you
+ * have to go looking for is a feature nobody keeps up to date.
+ */
+const BASE_TABS = ["list", "timeline", "settings"];
 
 /** Everything reached from a tab. These PUSH an entry and animate forward. */
 const PUSH_TARGETS = ["detail", "add", "report", "trash", "synclog", "help"];
@@ -69,7 +80,12 @@ const DRAFT_ID = "new";
 const $ = (id) => document.getElementById(id);
 
 /** The type chosen in the add view, waiting to become a draft record. */
-let draftType = null;
+/**
+ * What the next draft should be: its type, and for an event logged against a
+ * record, the subject it belongs to. Held here rather than in the URL because a
+ * draft exists only in memory — see openDraftRecord().
+ */
+let draftSeed = null;
 
 /** Set while a delete is in flight, so the unsaved-changes guard stays quiet. */
 let skipLeaveGuard = false;
@@ -159,12 +175,13 @@ export async function navigate(view, { id = null, fromPop = false } = {}) {
   if (view === "detail") {
     const opened = id === DRAFT_ID ? await openDraftRecord() : await openRecord(id);
     if (!opened) {
-      draftType = null;
+      draftSeed = null;
       return navigate("list", { fromPop });
     }
   }
   if (view === "list") await refreshList();
   if (view === "report") await renderReport();
+  if (view === "timeline") await renderTimeline();
   if (view === "settings") {
     paintStorage();
     paintSync();
@@ -192,10 +209,10 @@ export async function navigate(view, { id = null, fromPop = false } = {}) {
  * nothing to show — fall back to the list rather than an empty form.
  */
 async function openDraftRecord() {
-  if (!draftType) return false;
-  const type = draftType;
-  draftType = null;
-  return openDraft(type);
+  if (!draftSeed) return false;
+  const seed = draftSeed;
+  draftSeed = null;
+  return openDraft(seed.type, seed);
 }
 
 /** One popstate handler performs ALL back navigation (§9). */
@@ -243,6 +260,7 @@ function refreshLanguage() {
   refreshDetailLanguage();
   refreshTrashLanguage();
   refreshSyncLogLanguage();
+  refreshTimelineLanguage();
   if (state.currentView === "report") renderReport();
 }
 
@@ -309,6 +327,10 @@ async function updateAppBadge() {
  */
 async function dataChanged() {
   await refreshList();
+  // The timeline reads the same store, so an event saved from a record's page
+  // has to reach it too — otherwise it appears only after a tab switch and
+  // looks like it was not saved.
+  if (state.currentView === "timeline") await renderTimeline();
   updateAppBadge();
 }
 
@@ -448,6 +470,19 @@ function initViews() {
   initDetailView({
     onChanged: () => dataChanged(),
     onOpen: (id) => navigate("detail", { id }),
+    // Log an event against the record currently open. The event inherits its
+    // subject's type so it keeps that colour and filter chip (§5), and carries
+    // the subject in linkedIds so the history panel can find it again.
+    onLogEvent: (record) => {
+      if (!record || !record.id) return;
+      draftSeed = {
+        type: record.type,
+        kind: "event",
+        linkedIds: [record.id],
+        eventType: "maintenance",
+      };
+      navigate("detail", { id: DRAFT_ID });
+    },
     onDelete: (record) => {
       if (!record) return;
       skipLeaveGuard = true;
@@ -474,9 +509,13 @@ function initViews() {
 
   initAddView({
     onPick: (type) => {
-      draftType = type;
+      draftSeed = { type, kind: "record" };
       navigate("detail", { id: DRAFT_ID });
     },
+  });
+
+  initTimelineView({
+    onOpen: (id) => navigate("detail", { id }),
   });
 
   initTrashView({
