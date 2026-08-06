@@ -48,6 +48,20 @@ import {
   planBackupPruning,
   BACKUP_KEEP,
 } from "./merge.js";
+import {
+  cryptoAvailable,
+  makeSalt,
+  deriveKey,
+  isEnvelope,
+  envelopeKdf,
+  encryptPayload,
+  decryptPayload,
+  encryptBlob,
+  decryptBlob,
+  toBase64,
+  fromBase64,
+  KDF_ITERATIONS,
+} from "./crypto.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Configuration
@@ -81,7 +95,126 @@ const META = {
   folderId: "sync.folderId",
   pending: "sync.pendingAction",
   authState: "sync.authState",
+
+  // Encryption (§7). The KEY is stored as a non-extractable CryptoKey, which
+  // survives structured clone into IndexedDB and cannot be read back out — not
+  // by another script, and not by this one. The PASSPHRASE is never stored.
+  encKey: "enc.key",
+  encSalt: "enc.salt",
+  encIterations: "enc.iterations",
+  encEnabled: "enc.enabled",
+  // Salt seen on a remote envelope this device cannot yet open, so Settings
+  // can derive the same key once the passphrase is typed in.
+  encPending: "enc.pendingKdf",
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Encryption (§7)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Is the Drive payload meant to be encrypted on this device? */
+export async function isEncryptionOn() {
+  return !!(await getMeta(META.encEnabled, false));
+}
+
+/** Do we hold a usable key right now? */
+export async function hasEncryptionKey() {
+  return !!(await getMeta(META.encKey, null));
+}
+
+async function encryptionKey() {
+  return getMeta(META.encKey, null);
+}
+
+/**
+ * What Settings needs to draw the panel, in one call.
+ * `locked` is the state that matters: encryption is on somewhere, but this
+ * device cannot open it until the passphrase is entered.
+ */
+export async function encryptionStatus() {
+  const [enabled, key, pending] = await Promise.all([
+    isEncryptionOn(),
+    hasEncryptionKey(),
+    getMeta(META.encPending, null),
+  ]);
+  return {
+    supported: cryptoAvailable(),
+    enabled,
+    unlocked: !!key,
+    locked: !!pending && !key,
+  };
+}
+
+/**
+ * Turn encryption on with a new passphrase, or unlock a payload another device
+ * already encrypted.
+ *
+ * The salt is NOT invented when one already exists. A remote envelope carries
+ * the salt it was written with, and deriving from a fresh one would produce a
+ * different key for the same passphrase — the user would be told their own
+ * passphrase is wrong, on a file they encrypted themselves.
+ */
+export async function setPassphrase(passphrase) {
+  if (!cryptoAvailable()) throw new SyncError("no-crypto");
+  const phrase = String(passphrase || "");
+  if (phrase.length < 8) throw new SyncError("passphrase-short");
+
+  const pending = await getMeta(META.encPending, null);
+  const storedSalt = await getMeta(META.encSalt, null);
+
+  let salt;
+  let iterations = KDF_ITERATIONS;
+  if (pending) {
+    salt = fromBase64(pending.salt);
+    iterations = pending.iterations || KDF_ITERATIONS;
+  } else if (storedSalt) {
+    salt = fromBase64(storedSalt);
+    iterations = (await getMeta(META.encIterations, KDF_ITERATIONS)) || KDF_ITERATIONS;
+  } else {
+    salt = makeSalt();
+  }
+
+  const key = await deriveKey(phrase, salt, iterations);
+
+  // Unlocking an existing payload must PROVE the passphrase before it is
+  // accepted. Storing a wrong key would leave the app claiming to be unlocked
+  // and failing on every sync with no explanation.
+  if (pending && pending.probe) {
+    try {
+      await decryptPayload({ iv: pending.probe.iv, ct: pending.probe.ct }, key);
+    } catch {
+      throw new SyncError("wrong-passphrase");
+    }
+  }
+
+  await setMeta(META.encKey, key);
+  await setMeta(META.encSalt, toBase64(salt));
+  await setMeta(META.encIterations, iterations);
+  await setMeta(META.encEnabled, true);
+  await setMeta(META.encPending, null);
+  await logActivity("sync", "success", pending ? "unlocked" : "encryption on");
+  return { ok: true };
+}
+
+/**
+ * Stop encrypting. The key is dropped and the next sync writes plaintext.
+ *
+ * Deliberately does NOT reach out to Drive: the plaintext write happens on the
+ * next ordinary sync, which is the only moment the whole merged set is in hand
+ * anyway. Until then the remote stays encrypted and readable, because the salt
+ * is kept — turning it back on with the same passphrase still works.
+ */
+export async function disableEncryption() {
+  await setMeta(META.encKey, null);
+  await setMeta(META.encEnabled, false);
+  await setMeta(META.encPending, null);
+  await logActivity("sync", "success", "encryption off");
+}
+
+/** Forget the key without disabling, so the passphrase is asked for again. */
+export async function lockEncryption() {
+  await setMeta(META.encKey, null);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Status events (§8.1)
@@ -515,7 +648,7 @@ async function runSync({ interactive, kind }) {
     let remote = [];
     if (itemsFile) {
       const text = await downloadFile(token, itemsFile.id);
-      remote = parseItems(text);
+      remote = await readPayload(text);
     }
 
     // 2 — merge
@@ -541,7 +674,7 @@ async function runSync({ interactive, kind }) {
     await putItems(final.merged);
 
     // 5 — write back
-    const payload = serialiseItems(final.merged);
+    const payload = await writePayload(final.merged);
     await uploadFile(token, {
       fileId: itemsFile ? itemsFile.id : null,
       name: ITEMS_FILE,
@@ -561,7 +694,9 @@ async function runSync({ interactive, kind }) {
     // "Not configured" and "offline" are states, not failures. Logging them as
     // errors puts a red dot in the activity log for someone who simply has not
     // set sync up yet, which makes working software look broken.
-    const skipped = err instanceof SyncError && (err.code === "not-configured" || err.code === "offline");
+    const skipped =
+      err instanceof SyncError &&
+      (err.code === "not-configured" || err.code === "offline" || err.code === "needs-passphrase");
     await logActivity(kind, skipped ? "skipped" : "error", detail);
     emit(skipped ? "idle" : "error", detail);
     if (err instanceof SyncError) return skipped ? { skipped: err.code } : { error: err.code, detail: err.detail };
@@ -613,6 +748,10 @@ export function parseItems(text) {
   if (Array.isArray(parsed)) return parsed;
   if (parsed && typeof parsed === "object" && Array.isArray(parsed.items)) return parsed.items;
 
+  // An envelope this build DOES understand, but cannot open without a key.
+  // Not an error the sync should swallow — see readPayload().
+  if (isEnvelope(parsed)) throw new SyncError("encrypted", "payload is encrypted");
+
   // Recognisably a payload, just not one this build speaks. Name the version so
   // the sync log says "upgrade this device" rather than "something went wrong".
   if (parsed && typeof parsed === "object") {
@@ -626,9 +765,73 @@ export function parseItems(text) {
   throw new SyncError("unreadable", `unexpected ${typeof parsed}`);
 }
 
-function serialiseItems(records) {
-  return JSON.stringify(records);
+/**
+ * Read a payload, decrypting it if it is an envelope and we hold the key.
+ *
+ * When it is encrypted and we do NOT, the envelope's salt and a small probe are
+ * stashed so Settings can derive the same key the moment a passphrase is typed,
+ * and a `needs-passphrase` error stops the sync. Stopping matters: carrying on
+ * with an empty remote would merge to "Drive has nothing" and upload this
+ * device's plaintext straight over the encrypted file.
+ */
+async function readPayload(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(text || "").trim() || "[]");
+  } catch {
+    return parseItems(text); // let it raise the specific error
+  }
+
+  if (!isEnvelope(parsed)) return parseItems(text);
+
+  const key = await encryptionKey();
+  if (!key) {
+    const kdf = parsed.kdf || {};
+    await setMeta(META.encPending, {
+      salt: kdf.salt,
+      iterations: Number(kdf.iterations) || KDF_ITERATIONS,
+      // The envelope itself is the probe: if it decrypts, the passphrase is
+      // right. Nothing extra is written to Drive to make this possible.
+      probe: { iv: parsed.iv, ct: parsed.ct },
+    });
+    throw new SyncError("needs-passphrase", "remote payload is encrypted");
+  }
+
+  let items;
+  try {
+    items = await decryptPayload(parsed, key);
+  } catch {
+    // The key we hold does not open this file — the passphrase was changed on
+    // another device. Drop the key so the UI asks again rather than failing
+    // silently on every sync from here on.
+    const kdf = parsed.kdf || {};
+    await setMeta(META.encPending, {
+      salt: kdf.salt,
+      iterations: Number(kdf.iterations) || KDF_ITERATIONS,
+      probe: { iv: parsed.iv, ct: parsed.ct },
+    });
+    await setMeta(META.encKey, null);
+    throw new SyncError("wrong-passphrase", "stored key does not open the remote payload");
+  }
+
+  if (Array.isArray(items)) return items;
+  if (items && Array.isArray(items.items)) return items.items;
+  throw new SyncError("unreadable", "decrypted payload is not a record set");
 }
+
+/**
+ * Serialise the record set for upload, encrypting when a key is held.
+ * Returns text either way, because both forms are JSON on the wire.
+ */
+async function writePayload(records) {
+  const key = await encryptionKey();
+  if (!key || !(await isEncryptionOn())) return JSON.stringify(records);
+  const salt = fromBase64(await getMeta(META.encSalt, ""));
+  const iterations = (await getMeta(META.encIterations, KDF_ITERATIONS)) || KDF_ITERATIONS;
+  return JSON.stringify(await encryptPayload(records, key, salt, iterations));
+}
+
+
 
 async function reconcileMedia(token, folderId, actions, mediaFiles, records) {
   const stats = { uploaded: 0, downloaded: 0, removed: 0 };
@@ -637,20 +840,32 @@ async function reconcileMedia(token, folderId, actions, mediaFiles, records) {
 
   // Original filenames live on the records, not in the media store.
   const filenameById = new Map();
+  const mimeById = new Map();
   for (const record of records) {
     for (const attachment of record.attachments || []) {
-      if (attachment && attachment.mediaId) filenameById.set(attachment.mediaId, attachment.filename);
+      if (!attachment || !attachment.mediaId) continue;
+      filenameById.set(attachment.mediaId, attachment.filename);
+      if (attachment.mimeType) mimeById.set(attachment.mediaId, attachment.mimeType);
     }
   }
+
+  // A PDF of an insurance policy is exactly as sensitive as the JSON
+  // describing it, so attachments go through the same key. The filename is
+  // NOT encrypted — §7 reconciles media by the `<mediaId>__` prefix, and
+  // hiding it would mean re-implementing that from scratch for no real gain,
+  // since the record set that names those files is already encrypted.
+  const key = await encryptionKey();
+  const encrypting = key && (await isEncryptionOn());
 
   for (const mediaId of actions.toUpload) {
     const media = await getMedia(mediaId);
     if (!media || !media.blob) continue;
+    const payload = encrypting ? await encryptBlob(media.blob, key) : media.blob;
     await uploadFile(token, {
       name: mediaFilename(mediaId, filenameById.get(mediaId)),
       parents: [folderId],
-      blob: media.blob,
-      mimeType: media.blob.type || "application/octet-stream",
+      blob: payload,
+      mimeType: encrypting ? "application/octet-stream" : media.blob.type || "application/octet-stream",
     });
     stats.uploaded++;
   }
@@ -658,7 +873,21 @@ async function reconcileMedia(token, folderId, actions, mediaFiles, records) {
   for (const mediaId of actions.toDownload) {
     const file = nameById.get(mediaId);
     if (!file) continue;
-    const blob = await downloadFile(token, file.id, { asBlob: true });
+    const raw = await downloadFile(token, file.id, { asBlob: true });
+
+    // decryptBlob hands back anything WITHOUT the header untouched, so files
+    // uploaded before encryption was switched on still open. The MIME type
+    // comes from the record, because ciphertext cannot carry one.
+    let blob = raw;
+    if (key) {
+      try {
+        blob = await decryptBlob(raw, key, mimeById.get(mediaId) || "application/octet-stream");
+      } catch {
+        // One unreadable attachment must not abort a whole sync — the records
+        // matter more. It stays on Drive and can be retried.
+        continue;
+      }
+    }
     await putMedia({ id: mediaId, blob, thumbnailBlob: null });
     stats.downloaded++;
   }
@@ -734,7 +963,7 @@ export async function backupNow() {
     await uploadFile(token, {
       name,
       parents: [backupFolder],
-      blob: new Blob([serialiseItems(items)], { type: "application/json" }),
+      blob: new Blob([await writePayload(items)], { type: "application/json" }),
       mimeType: "application/json",
     });
     // Prune AFTER the new one is safely uploaded, never before: an interrupted
@@ -806,7 +1035,7 @@ export async function restoreBackup(fileId, mode = "merge") {
       return { skipped: "no-token" };
     }
     const text = await downloadFile(token, fileId);
-    const backup = parseItems(text);
+    const backup = await readPayload(text);
 
     if (mode === "replace") {
       await clearItems();
@@ -818,7 +1047,7 @@ export async function restoreBackup(fileId, mode = "merge") {
         fileId: itemsFile ? itemsFile.id : null,
         name: ITEMS_FILE,
         parents: [folderId],
-        blob: new Blob([serialiseItems(backup)], { type: "application/json" }),
+        blob: new Blob([await writePayload(backup)], { type: "application/json" }),
         mimeType: "application/json",
       });
     } else {

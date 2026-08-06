@@ -25,7 +25,7 @@
  * wonder why the suite stopped updating.
  */
 
-const CACHE_VERSION = "hms-v28";
+const CACHE_VERSION = "hms-v29";
 
 const PRECACHE = [
   "./",
@@ -39,6 +39,7 @@ const PRECACHE = [
   "db.js",
   "sync.js",
   "merge.js",
+  "crypto.js",
   "ui.js",
   "i18n.js",
   "icons.js",

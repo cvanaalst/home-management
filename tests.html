@@ -46,6 +46,11 @@ import {
 import { helpText } from "./help.js";
 import { parseItems, SyncError } from "./sync.js";
 import {
+  deriveKey, makeSalt, encryptPayload, decryptPayload, isEnvelope, envelopeKdf,
+  encryptBlob, decryptBlob, isEncryptedBlob, toBase64, fromBase64,
+  PAYLOAD_VERSION, KDF_ITERATIONS, cryptoAvailable,
+} from "./crypto.js";
+import {
   resolveRecord, mergeItemSets, isEmptyMerge,
   mediaFilename, mediaIdFromFilename, referencedMediaIds, computeMediaActions,
   planRestore, planPurge, MEDIA_SEPARATOR,
@@ -952,8 +957,9 @@ function refuses(text, expectedCode, message) {
   assertEqual(thrown && thrown.code, expectedCode, `${message} — code is "${expectedCode}"`);
 }
 
-refuses('{"v":2,"enc":"AES-GCM","iv":"…","ct":"…"}', "unsupported-format",
-  "an ENCRYPTED payload from a newer build is refused, not treated as empty");
+refuses('{"v":2,"enc":"AES-GCM","iv":"…","ct":"…"}', "encrypted",
+  "an encrypted payload is reported AS encrypted, so the sync can ask for a passphrase " +
+  "instead of treating it as empty and overwriting it with plaintext");
 refuses('{"version":3,"records":[]}', "unsupported-format",
   "any future payload shape is refused");
 refuses('{"something":"else"}', "unsupported-format", "an object with no items array is refused");
@@ -976,6 +982,141 @@ refuses("42", "unreadable", "a bare number is refused");
   // items wins over a version marker: an enveloped v1 payload is still readable.
   assertDeepEqual(parseItems('{"v":1,"items":[{"id":"x"}]}'), [{ id: "x" }],
     "a version marker alongside a readable items array does not block the read");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// crypto.js — the Drive payload envelope (§7)
+// ═══════════════════════════════════════════════════════════════════════════
+group("crypto.js · base64");
+
+assertEqual(toBase64(new Uint8Array([1, 2, 3])), "AQID", "bytes to base64");
+assertDeepEqual([...fromBase64("AQID")], [1, 2, 3], "…and back again");
+assertDeepEqual([...fromBase64(toBase64(new Uint8Array(0)))], [], "empty round-trips");
+{
+  // The chunked encoder exists because String.fromCharCode(...big) blows the
+  // argument limit — an attachment is far past it.
+  // getRandomValues refuses more than 65536 bytes in one call, so fill in
+  // chunks — the point here is the ENCODER's chunking, not the entropy.
+  const big = new Uint8Array(200000);
+  for (let i = 0; i < big.length; i += 65536) {
+    crypto.getRandomValues(big.subarray(i, Math.min(i + 65536, big.length)));
+  }
+  assertDeepEqual([...fromBase64(toBase64(big))], [...big],
+    "200 kB round-trips, so a real attachment does not overflow the argument list");
+}
+
+group("crypto.js · envelope round-trip");
+
+assertTrue(cryptoAvailable(), "WebCrypto is available");
+
+{
+  const salt = makeSalt();
+  assertEqual(salt.length, 16, "the salt is 128 bits");
+  const key = await deriveKey("een lange wachtwoordzin", salt, 1000);
+  const records = [{ id: "a", title: "Polis", body: "rekeningnummer 1234" }];
+
+  const envelope = await encryptPayload(records, key, salt, 1000);
+  assertTrue(isEnvelope(envelope), "the result is recognisably an envelope");
+  assertEqual(envelope.v, PAYLOAD_VERSION, "…stamped with the payload version");
+  assertEqual(envelope.enc, "AES-GCM", "…and the algorithm");
+
+  const wire = JSON.stringify(envelope);
+  assertTrue(!wire.includes("1234"), "the account number is NOT in the serialised payload");
+  assertTrue(!wire.includes("Polis"), "…nor is the title");
+
+  assertDeepEqual(await decryptPayload(envelope, key), records, "the same key gets it back");
+}
+{
+  // The salt travels with the payload: a second device has never seen it.
+  const salt = makeSalt();
+  const key = await deriveKey("wachtwoordzin", salt, 1000);
+  const envelope = await encryptPayload([{ id: "x" }], key, salt, 1000);
+
+  const { salt: shipped, iterations } = envelopeKdf(envelope);
+  assertDeepEqual([...shipped], [...salt], "the salt is carried on the envelope");
+  assertEqual(iterations, 1000, "…with the iteration count that produced it");
+
+  const second = await deriveKey("wachtwoordzin", shipped, iterations);
+  assertDeepEqual(await decryptPayload(envelope, second), [{ id: "x" }],
+    "a second device derives the SAME key from the shipped salt");
+}
+{
+  const salt = makeSalt();
+  const right = await deriveKey("de juiste zin", salt, 1000);
+  const wrong = await deriveKey("de verkeerde zin", salt, 1000);
+  const envelope = await encryptPayload([{ id: "a" }], right, salt, 1000);
+
+  let threw = false;
+  try {
+    await decryptPayload(envelope, wrong);
+  } catch {
+    threw = true;
+  }
+  assertTrue(threw,
+    "a wrong passphrase THROWS — AES-GCM authenticates, so it can never return plausible nonsense");
+}
+{
+  const salt = makeSalt();
+  const a = await deriveKey("zelfde zin", salt, 1000);
+  const b = await deriveKey("zelfde zin", makeSalt(), 1000);
+  const envelope = await encryptPayload([{ id: "a" }], a, salt, 1000);
+  let threw = false;
+  try {
+    await decryptPayload(envelope, b);
+  } catch {
+    threw = true;
+  }
+  assertTrue(threw, "the same phrase with a DIFFERENT salt is a different key, as it must be");
+}
+{
+  const salt = makeSalt();
+  const key = await deriveKey("wachtwoordzin", salt, 1000);
+  const one = await encryptPayload([{ id: "a" }], key, salt, 1000);
+  const two = await encryptPayload([{ id: "a" }], key, salt, 1000);
+  assertTrue(one.iv !== two.iv, "every encryption gets a fresh IV");
+  assertTrue(one.ct !== two.ct,
+    "…so identical data never produces identical ciphertext, which would leak that nothing changed");
+}
+
+group("crypto.js · isEnvelope");
+
+assertTrue(!isEnvelope([]), "a bare array is not an envelope");
+assertTrue(!isEnvelope([{ id: "a" }]), "…nor is a record set");
+assertTrue(!isEnvelope({ items: [] }), "…nor the v1 enveloped form");
+assertTrue(!isEnvelope(null), "…nor null");
+assertTrue(!isEnvelope({ enc: "AES-GCM" }), "…nor a half-built one with no ciphertext");
+assertTrue(isEnvelope({ enc: "AES-GCM", iv: "x", ct: "y" }), "the real shape is recognised");
+
+group("crypto.js · attachments");
+
+{
+  const salt = makeSalt();
+  const key = await deriveKey("wachtwoordzin", salt, 1000);
+  const original = new Blob(["%PDF-1.4 polisnummer 998877"], { type: "application/pdf" });
+
+  const sealed = await encryptBlob(original, key);
+  assertTrue(await isEncryptedBlob(sealed), "the header marks it as encrypted");
+  const sealedText = await sealed.text();
+  assertTrue(!sealedText.includes("998877"), "the policy number is not in the uploaded bytes");
+
+  const opened = await decryptBlob(sealed, key, "application/pdf");
+  assertEqual(await opened.text(), "%PDF-1.4 polisnummer 998877", "…and comes back intact");
+  assertEqual(opened.type, "application/pdf",
+    "the MIME type is restored from the record, since ciphertext cannot carry one");
+}
+{
+  // Files uploaded before encryption was switched on are still on Drive in the
+  // clear. They must keep opening, which is what the header is for.
+  const salt = makeSalt();
+  const key = await deriveKey("wachtwoordzin", salt, 1000);
+  const plain = new Blob(["gewoon een tekstbestand"], { type: "text/plain" });
+  assertTrue(!(await isEncryptedBlob(plain)), "a plaintext blob has no header");
+  assertEqual(await (await decryptBlob(plain, key, "text/plain")).text(), "gewoon een tekstbestand",
+    "…and is handed back untouched rather than failing to decrypt");
+}
+{
+  const tiny = new Blob([new Uint8Array([1, 2])]);
+  assertTrue(!(await isEncryptedBlob(tiny)), "a blob too short to hold a header is not encrypted");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

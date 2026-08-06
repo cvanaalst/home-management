@@ -24,7 +24,7 @@ import {
   getMeta,
   setMeta,
 } from "./db.js";
-import { toast, formatBytes, formatDateTime, todayIso } from "./ui.js";
+import { toast, formatBytes, formatDateTime, todayIso, escapeHtml } from "./ui.js";
 import { toJsonExport, toCsv, buildPrintHtml, exportFilename } from "./report.js";
 import { renderMarkdown } from "./markdown.js";
 import { helpText } from "./help.js";
@@ -45,10 +45,172 @@ import {
   redirectUri,
   javascriptOrigin,
   hasBuiltInClientId,
+  encryptionStatus,
+  setPassphrase,
+  disableEncryption,
 } from "./sync.js";
 import { confirmDialog, trapFocus } from "./ui.js";
 
 const $ = (id) => document.getElementById(id);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Drive encryption (§7)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function paintEncryption() {
+  const panel = $("encrypt-panel");
+  if (!panel) return;
+  const status = await encryptionStatus();
+
+  const form = $("encrypt-form");
+  const save = $("btn-encrypt-save");
+  const sheet = $("btn-encrypt-sheet");
+  const off = $("btn-encrypt-off");
+
+  if (!status.supported) {
+    $("encrypt-status").textContent = t("encrypt.unsupported");
+    $("encrypt-hint").textContent = "";
+    form.hidden = true;
+    save.hidden = true;
+    sheet.hidden = true;
+    off.hidden = true;
+    return;
+  }
+
+  // Three states, and the middle one is the one that must be unmistakable:
+  // another device encrypted the payload and this one cannot read it yet.
+  if (status.locked) {
+    $("encrypt-status").textContent = t("encrypt.status.locked");
+    $("encrypt-hint").textContent = t("encrypt.hint.locked");
+    form.hidden = false;
+    $("encrypt-pass2").hidden = true; // unlocking, not choosing — no confirm
+    save.hidden = false;
+    save.textContent = t("encrypt.unlock");
+    sheet.hidden = true;
+    off.hidden = true;
+    return;
+  }
+
+  if (status.enabled && status.unlocked) {
+    $("encrypt-status").textContent = t("encrypt.status.on");
+    $("encrypt-hint").textContent = t("encrypt.hint.on");
+    form.hidden = true;
+    save.hidden = true;
+    sheet.hidden = false;
+    off.hidden = false;
+    return;
+  }
+
+  $("encrypt-status").textContent = t("encrypt.status.off");
+  $("encrypt-hint").textContent = t("encrypt.hint.off");
+  form.hidden = false;
+  $("encrypt-pass2").hidden = false;
+  save.hidden = false;
+  save.textContent = t("encrypt.enable");
+  sheet.hidden = true;
+  off.hidden = true;
+}
+
+function bindEncryption() {
+  const save = $("btn-encrypt-save");
+  if (!save) return;
+
+  save.addEventListener("click", async () => {
+    const status = await encryptionStatus();
+    const pass = $("encrypt-pass").value;
+    const repeat = $("encrypt-pass2").value;
+
+    if (!status.locked) {
+      if (pass !== repeat) {
+        toast(t("encrypt.mismatch"), "error");
+        return;
+      }
+      // Switching this on is the one action in the app that can permanently
+      // destroy data if the passphrase is lost, so it is confirmed in as many
+      // words rather than with a generic "are you sure".
+      const ok = await confirmDialog(t("encrypt.confirm"), t("encrypt.enable"), { danger: false });
+      if (!ok) return;
+    }
+
+    try {
+      await setPassphrase(pass);
+      $("encrypt-pass").value = "";
+      $("encrypt-pass2").value = "";
+      toast(t(status.locked ? "encrypt.unlocked" : "encrypt.enabled"), "success");
+      await paintEncryption();
+      callbacks.onSynced();
+    } catch (err) {
+      const code = err && err.code;
+      toast(
+        t(
+          code === "passphrase-short"
+            ? "encrypt.tooShort"
+            : code === "wrong-passphrase"
+              ? "encrypt.wrong"
+              : "encrypt.failed"
+        ),
+        "error"
+      );
+    }
+  });
+
+  $("btn-encrypt-off").addEventListener("click", async () => {
+    const ok = await confirmDialog(t("encrypt.disable.confirm"), t("encrypt.disable"));
+    if (!ok) return;
+    await disableEncryption();
+    toast(t("encrypt.disabled"), "info");
+    await paintEncryption();
+  });
+
+  $("btn-encrypt-sheet").addEventListener("click", printRecoverySheet);
+}
+
+/**
+ * A sheet to print and put somewhere physical.
+ *
+ * Deliberately does NOT contain the passphrase — this app never sees it after
+ * derivation and could not print it if it wanted to. What it gives is the
+ * context someone would need months later: which account, which folder, and
+ * the fact that nothing on Drive can be read without it.
+ */
+function printRecoverySheet() {
+  const win = window.open("", "_blank");
+  if (!win) {
+    toast(t("print.blocked"), "error");
+    return;
+  }
+  const rows = [
+    [t("encrypt.sheet.app"), "Huisbeheer — Home Management"],
+    [t("encrypt.sheet.where"), "Google Drive / Huisbeheer"],
+    [t("encrypt.sheet.method"), "AES-GCM-256, PBKDF2-SHA-256"],
+    [t("encrypt.sheet.date"), new Date().toLocaleDateString(state.lang === "en" ? "en-GB" : "nl-BE")],
+  ];
+  win.document.write(
+    `<!doctype html><html lang="${state.lang}"><head><meta charset="utf-8">` +
+      `<title>${escapeHtml(t("encrypt.sheet.title"))}</title><style>` +
+      `body{font:15px/1.6 -apple-system,system-ui,sans-serif;margin:40px;max-width:640px}` +
+      `h1{font-size:22px;margin:0 0 4px}p{margin:0 0 16px}` +
+      `table{border-collapse:collapse;width:100%;margin:24px 0}` +
+      `th,td{text-align:left;padding:8px 0;border-bottom:1px solid #ddd;vertical-align:top}` +
+      `th{width:38%;font-weight:600}` +
+      `.box{border:2px solid #222;border-radius:8px;padding:16px;margin-top:8px}` +
+      `.line{border-bottom:1px solid #888;height:34px;margin-top:12px}` +
+      `.warn{border-left:4px solid #b00;padding-left:12px}` +
+      `</style></head><body>` +
+      `<h1>${escapeHtml(t("encrypt.sheet.title"))}</h1>` +
+      `<p>${escapeHtml(t("encrypt.sheet.intro"))}</p>` +
+      `<table>${rows
+        .map(([k, v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`)
+        .join("")}</table>` +
+      `<div class="box"><strong>${escapeHtml(t("encrypt.sheet.write"))}</strong>` +
+      `<div class="line"></div></div>` +
+      `<p class="warn" style="margin-top:24px">${escapeHtml(t("encrypt.sheet.warning"))}</p>` +
+      `</body></html>`
+  );
+  win.document.close();
+  win.focus();
+  win.print();
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Reminder notifications (§8.16)
@@ -221,6 +383,7 @@ export function initSettingsView(handlers = {}) {
   bindSync();
   bindInstall();
   bindNotify();
+  bindEncryption();
   $("btn-storage-refresh").addEventListener("click", paintStorage);
   $("btn-export-json").addEventListener("click", exportJson);
   $("btn-export-csv").addEventListener("click", exportCsv);
@@ -647,5 +810,6 @@ export function refreshSettingsLanguage() {
   paintSync();
   paintInstall();
   paintNotify();
+  paintEncryption();
   if (!$("view-help").hidden) renderHelp();
 }

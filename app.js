@@ -52,6 +52,7 @@ import {
   paintSync,
   paintInstall,
   paintNotify,
+  paintEncryption,
   printRecords,
   renderHelp,
   refreshSettingsLanguage,
@@ -206,6 +207,7 @@ export async function navigate(view, { id = null, fromPop = false } = {}) {
     paintSync();
     paintInstall();
     paintNotify();
+    paintEncryption();
   }
   if (view === "trash") await renderTrash();
   if (view === "synclog") await renderSyncLog();

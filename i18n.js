@@ -80,6 +80,45 @@ const dict = {
     // ── paste to create (§8) ────────────────────────────────────────────────
     "paste.file": "Bestand geplakt in een nieuw item",
     "paste.text": "Tekst geplakt in een nieuw item",
+    // ── Drive-versleuteling (§7) ────────────────────────────────────────────
+    "encrypt.title": "Versleuteling",
+    "encrypt.status.off": "Uit \u2014 je gegevens staan leesbaar op Drive.",
+    "encrypt.status.on": "Aan \u2014 alles op Drive is versleuteld.",
+    "encrypt.status.locked": "Vergrendeld \u2014 een ander apparaat heeft dit versleuteld.",
+    "encrypt.hint.off":
+      "Versleutelt items.json, de back-ups en je bijlagen op Drive. Op dit apparaat blijft alles leesbaar; dat is al beschermd door je schijfversleuteling en toegangscode.",
+    "encrypt.hint.on":
+      "Voer op elk ander apparaat dezelfde wachtwoordzin in om te kunnen synchroniseren.",
+    "encrypt.hint.locked":
+      "Voer de wachtwoordzin in die je op het andere apparaat hebt gekozen. Zonder die zin kan deze app niets van Drive lezen.",
+    "encrypt.passphrase": "Wachtwoordzin",
+    "encrypt.passphrase.repeat": "Herhaal de wachtwoordzin",
+    "encrypt.enable": "Aanzetten",
+    "encrypt.unlock": "Ontgrendelen",
+    "encrypt.disable": "Uitzetten",
+    "encrypt.sheet": "Herstelblad afdrukken",
+    "encrypt.confirm":
+      "Zonder deze wachtwoordzin is niets op Drive nog te lezen \u2014 ook niet door mij, en ook je back-ups niet. Er is geen herstel. Schrijf hem op en bewaar hem ergens veilig. Doorgaan?",
+    "encrypt.disable.confirm":
+      "Volgende synchronisatie zet je gegevens weer leesbaar op Drive. Doorgaan?",
+    "encrypt.enabled": "Versleuteling staat aan",
+    "encrypt.unlocked": "Ontgrendeld",
+    "encrypt.disabled": "Versleuteling staat uit",
+    "encrypt.mismatch": "De twee wachtwoordzinnen zijn niet gelijk.",
+    "encrypt.tooShort": "Gebruik minstens 8 tekens.",
+    "encrypt.wrong": "Die wachtwoordzin klopt niet.",
+    "encrypt.failed": "Versleuteling mislukt.",
+    "encrypt.unsupported": "Deze browser ondersteunt geen versleuteling.",
+    "encrypt.sheet.title": "Herstelblad \u2014 Huisbeheer",
+    "encrypt.sheet.intro":
+      "Bewaar dit blad op een veilige plek, los van je computer en telefoon. Zonder de wachtwoordzin is er geen enkele manier om je gegevens op Drive terug te lezen.",
+    "encrypt.sheet.app": "App",
+    "encrypt.sheet.where": "Waar de gegevens staan",
+    "encrypt.sheet.method": "Methode",
+    "encrypt.sheet.date": "Aangemaakt op",
+    "encrypt.sheet.write": "Wachtwoordzin (met de hand invullen):",
+    "encrypt.sheet.warning":
+      "De app kent deze zin niet en kan hem niet afdrukken \u2014 hij wordt nergens opgeslagen. Raak je hem kwijt, dan zijn de gegevens op Drive definitief onleesbaar.",
     "nav.timeline": "Tijdlijn",
     "view.timeline.title": "Tijdlijn",
 
@@ -566,6 +605,43 @@ const dict = {
     // ── paste to create (§8) ────────────────────────────────────────────────
     "paste.file": "File pasted into a new record",
     "paste.text": "Text pasted into a new record",
+    // ── Drive encryption (§7) ───────────────────────────────────────────────
+    "encrypt.title": "Encryption",
+    "encrypt.status.off": "Off \u2014 your data sits readable on Drive.",
+    "encrypt.status.on": "On \u2014 everything on Drive is encrypted.",
+    "encrypt.status.locked": "Locked \u2014 another device encrypted this.",
+    "encrypt.hint.off":
+      "Encrypts items.json, the backups and your attachments on Drive. This device stays readable, which your disk encryption and passcode already cover.",
+    "encrypt.hint.on": "Enter the same passphrase on any other device before it can sync.",
+    "encrypt.hint.locked":
+      "Enter the passphrase you chose on the other device. Without it this app cannot read anything from Drive.",
+    "encrypt.passphrase": "Passphrase",
+    "encrypt.passphrase.repeat": "Repeat the passphrase",
+    "encrypt.enable": "Turn on",
+    "encrypt.unlock": "Unlock",
+    "encrypt.disable": "Turn off",
+    "encrypt.sheet": "Print a recovery sheet",
+    "encrypt.confirm":
+      "Without this passphrase nothing on Drive can be read again \u2014 not by me either, and that includes your backups. There is no recovery. Write it down and keep it somewhere safe. Continue?",
+    "encrypt.disable.confirm": "The next sync puts your data back on Drive readable. Continue?",
+    "encrypt.enabled": "Encryption is on",
+    "encrypt.unlocked": "Unlocked",
+    "encrypt.disabled": "Encryption is off",
+    "encrypt.mismatch": "The two passphrases are not the same.",
+    "encrypt.tooShort": "Use at least 8 characters.",
+    "encrypt.wrong": "That passphrase is not right.",
+    "encrypt.failed": "Encryption failed.",
+    "encrypt.unsupported": "This browser has no encryption support.",
+    "encrypt.sheet.title": "Recovery sheet \u2014 Huisbeheer",
+    "encrypt.sheet.intro":
+      "Keep this sheet somewhere safe, away from your computer and phone. Without the passphrase there is no way whatsoever to read your data on Drive again.",
+    "encrypt.sheet.app": "App",
+    "encrypt.sheet.where": "Where the data lives",
+    "encrypt.sheet.method": "Method",
+    "encrypt.sheet.date": "Created on",
+    "encrypt.sheet.write": "Passphrase (fill in by hand):",
+    "encrypt.sheet.warning":
+      "The app does not know this phrase and cannot print it \u2014 it is never stored anywhere. Lose it and the data on Drive is permanently unreadable.",
     "nav.timeline": "Timeline",
     "view.timeline.title": "Timeline",
 

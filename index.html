@@ -208,6 +208,28 @@
         </div>
       </section>
 
+      <section class="panel" id="encrypt-panel">
+        <h2 class="panel__title" data-i18n="encrypt.title">Versleuteling</h2>
+        <p class="field__hint" id="encrypt-status"></p>
+        <p class="field__hint" id="encrypt-hint"></p>
+        <div class="field field--stack" id="encrypt-form" hidden>
+          <input type="password" class="input" id="encrypt-pass"
+                 autocomplete="new-password" spellcheck="false"
+                 data-i18n-placeholder="encrypt.passphrase">
+          <input type="password" class="input" id="encrypt-pass2"
+                 autocomplete="new-password" spellcheck="false"
+                 data-i18n-placeholder="encrypt.passphrase.repeat">
+        </div>
+        <div class="button-row">
+          <button type="button" class="btn btn--primary" id="btn-encrypt-save"
+                  data-i18n="encrypt.enable">Aanzetten</button>
+          <button type="button" class="btn btn--ghost btn--small" id="btn-encrypt-sheet"
+                  data-i18n="encrypt.sheet" hidden>Herstelblad afdrukken</button>
+          <button type="button" class="btn btn--ghost btn--small btn--danger-text" id="btn-encrypt-off"
+                  data-i18n="encrypt.disable" hidden>Uitzetten</button>
+        </div>
+      </section>
+
       <section class="panel" id="notify-panel">
         <h2 class="panel__title" data-i18n="notify.title">Herinneringen</h2>
         <p class="field__hint" id="notify-hint"></p>
