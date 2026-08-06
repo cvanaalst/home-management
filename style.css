@@ -49,21 +49,31 @@
 }
 
 /*
-  §8.10 requires ONE self-hosted display face (woff2, Latin subset) for the
-  brand and headings — never a font CDN, which breaks offline and adds a third
-  party. No such file ships yet, so --font-display falls through to the system
-  stack and nothing 404s. To activate it: drop the file at fonts/display.woff2,
-  uncomment the block below, add the path to PRECACHE in sw.js, and bump
-  CACHE_VERSION.
+  §8.10: ONE self-hosted display face for the brand and headings — never a font
+  CDN, which breaks offline and adds a third party. The file is precached by
+  sw.js, so headings look the same with the network off.
 
-  @font-face {
-    font-family: "Huisbeheer Display";
-    src: url("fonts/display.woff2") format("woff2");
-    font-weight: 400 700;
-    font-display: swap;
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC;
-  }
+  `font-weight: 400 700` on a file that holds a SINGLE static weight is
+  deliberate, not a mistake. Declaring the range tells the browser this one face
+  covers all of it, so the 650 and 700 the app asks for match exactly and it
+  never fakes a bold by smearing the outlines — synthetic bold on a serif
+  display face looks awful. Verified: every weight in the range renders at
+  identical width, and nothing in the app asks for a weight outside it.
+
+  `font-display: swap` renders headings immediately in the system stack and
+  reflows once the face arrives. After the first visit it is precached, so the
+  swap is invisible; blocking instead would give a blank heading.
+
+  `unicode-range` stops the browser fetching it at all for non-Latin text — it
+  is what makes a subset worth subsetting.
 */
+@font-face {
+  font-family: "Huisbeheer Display";
+  src: url("fonts/display.woff2") format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC;
+}
 
 /* ── Theme: dark (default) ─────────────────────────────────────────────── */
 :root,

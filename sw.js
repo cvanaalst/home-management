@@ -18,7 +18,7 @@
  * wonder why the suite stopped updating.
  */
 
-const CACHE_VERSION = "hms-v19";
+const CACHE_VERSION = "hms-v20";
 
 const PRECACHE = [
   "./",
@@ -50,6 +50,7 @@ const PRECACHE = [
   "view-activity.js",
 
   // assets
+  "fonts/display.woff2",
   "icons/icon-192.png",
   "icons/icon-512.png",
   "icons/icon-512-maskable.png",
