@@ -156,7 +156,9 @@ function buildWeekChart(items, today) {
   hint.textContent = t("report.weeksHint");
   panel.append(hint);
 
-  const buckets = bucketItemsByWeek(items, WEEKS, { field: "createdAt", today });
+  // Records only, to match the tiles above it — a chart counting events too
+  // would show a busy month where nothing was actually filed.
+  const buckets = bucketItemsByWeek(items, WEEKS, { field: "createdAt", today, kind: "record" });
   const max = Math.max(1, ...buckets.map((b) => b.count));
 
   // A viewBox plus width:100% makes the chart resolution-independent with no

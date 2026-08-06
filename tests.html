@@ -43,6 +43,7 @@ import {
   exportFilename, CSV_COLUMNS, CSV_SEPARATOR,
 } from "./report.js";
 import { helpText } from "./help.js";
+import { parseItems, SyncError } from "./sync.js";
 import {
   resolveRecord, mergeItemSets, isEmptyMerge,
   mediaFilename, mediaIdFromFilename, referencedMediaIds, computeMediaActions,
@@ -51,6 +52,9 @@ import {
 } from "./merge.js";
 import {
   makeId, makeRecord, hydrateRecord, normalizeType, TYPES, DEFAULT_TYPE, SORT_FIELDS,
+  KINDS, DEFAULT_KIND, normalizeKind, EVENT_TYPES, DEFAULT_EVENT_TYPE, normalizeEventType,
+  RECURRENCE_UNITS, normalizeRecurrence, normalizeAmount,
+  versionKey, versionKeyRange, VERSION_KEEP, STORE_VERSIONS,
   normalizeSearchText, buildHaystack, stripTrackingParams, normalizeUrl,
   queryItemSet, makeComparator,
   computeStats, weekStart, bucketItemsByWeek, sortTagsByRecency,
@@ -62,7 +66,7 @@ import {
   getMeta, setMeta, deleteMeta, logActivity, getActivityLog, clearActivityLog,
   getStats, getStorageEstimate,
 } from "./db.js";
-import { t, typeLabel, _dictKeys } from "./i18n.js";
+import { t, typeLabel, eventTypeLabel, kindLabel, _dictKeys } from "./i18n.js";
 import { icon, typeIcon, ICON_NAMES } from "./icons.js";
 import { state, setLang } from "./state.js";
 import { VERSION, versionLine } from "./version.js";
@@ -878,6 +882,62 @@ assertEqual(typeof BACKUP_KEEP, "number", "BACKUP_KEEP is exported so sync.js an
 assertTrue(BACKUP_KEEP > 0, "keeping zero backups would defeat the point");
 
 // ═══════════════════════════════════════════════════════════════════════════
+// sync.js — the payload guard (§7)
+// ═══════════════════════════════════════════════════════════════════════════
+group("sync.js · parseItems refuses what it cannot read");
+
+// This guard exists for one scenario. Encrypting items.json is coming; a device
+// still on an older build would parse the envelope as "no records", merge that
+// as an empty remote, and then upload its own plaintext set straight over the
+// encrypted file. Every account number republished in the clear, reported as a
+// successful sync. So: unrecognised means ABORT, never "assume empty".
+
+assertDeepEqual(parseItems('[]'), [], "a bare empty array reads as no records");
+assertDeepEqual(parseItems('[{"id":"a"}]'), [{ id: "a" }], "the v1 bare-array payload still reads");
+assertDeepEqual(parseItems('{"items":[{"id":"a"}]}'), [{ id: "a" }],
+  "the enveloped form reads too — this is the hook the encrypted payload will hang on");
+assertDeepEqual(parseItems(""), [], "a zero-byte file is the one benign empty case");
+assertDeepEqual(parseItems("   \n "), [], "…whitespace too");
+assertDeepEqual(parseItems(null), [], "…and a missing body");
+
+function refuses(text, expectedCode, message) {
+  let thrown = null;
+  try {
+    parseItems(text);
+  } catch (err) {
+    thrown = err;
+  }
+  assertTrue(thrown instanceof SyncError, `${message} — throws a SyncError`);
+  assertEqual(thrown && thrown.code, expectedCode, `${message} — code is "${expectedCode}"`);
+}
+
+refuses('{"v":2,"enc":"AES-GCM","iv":"…","ct":"…"}', "unsupported-format",
+  "an ENCRYPTED payload from a newer build is refused, not treated as empty");
+refuses('{"version":3,"records":[]}', "unsupported-format",
+  "any future payload shape is refused");
+refuses('{"something":"else"}', "unsupported-format", "an object with no items array is refused");
+refuses("not json at all", "unreadable", "a corrupt file is refused");
+refuses('{"items":', "unreadable", "a truncated file is refused");
+refuses('"a string"', "unreadable", "a bare JSON string is refused");
+refuses("42", "unreadable", "a bare number is refused");
+
+{
+  let thrown = null;
+  try {
+    parseItems('{"v":2,"enc":"AES-GCM"}');
+  } catch (err) {
+    thrown = err;
+  }
+  assertTrue(String(thrown.detail).includes("v2"),
+    "the refusal names the payload version, so the sync log says 'upgrade this device' rather than 'something went wrong'");
+}
+{
+  // items wins over a version marker: an enveloped v1 payload is still readable.
+  assertDeepEqual(parseItems('{"v":1,"items":[{"id":"x"}]}'), [{ id: "x" }],
+    "a version marker alongside a readable items array does not block the read");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // report.js — export and print builders (§8.6, §8.7)
 // ═══════════════════════════════════════════════════════════════════════════
 group("report.js · csvCell");
@@ -1091,7 +1151,8 @@ group("db.js · makeRecord (the §5 envelope)");
   const ENVELOPE = [
     "id", "type", "createdAt", "updatedAt", "deletedAt", "restoredAt", "purgedAt",
     "title", "comment", "tags", "pinned", "reminderAt", "linkedIds",
-    "body", "reminderType", "links", "attachments",
+    "body", "reminderType", "recurrence", "links", "attachments",
+    "kind", "occurredAt", "eventType", "amount",
   ];
   for (const field of ENVELOPE) {
     assertTrue(field in r, `every record carries \`${field}\``);
@@ -1103,6 +1164,11 @@ group("db.js · makeRecord (the §5 envelope)");
   assertEqual(r.pinned, false, "pinned starts false");
   assertEqual(r.reminderAt, null, "reminderAt starts null");
   assertEqual(r.reminderType, "", "reminderType starts empty");
+  assertEqual(r.kind, DEFAULT_KIND, "a new row is a record, not an event");
+  assertEqual(r.occurredAt, null, "occurredAt starts null");
+  assertEqual(r.eventType, "", "a record carries no event type");
+  assertEqual(r.amount, null, "amount starts null");
+  assertEqual(r.recurrence, null, "recurrence starts null — nothing repeats by default");
   assertEqual(r.createdAt, r.updatedAt, "createdAt equals updatedAt on creation");
   assertTrue(!Number.isNaN(Date.parse(r.createdAt)), "createdAt is a parseable ISO string");
 }
@@ -1311,6 +1377,107 @@ assertEqual(
 // ═══════════════════════════════════════════════════════════════════════════
 // db.js — the query engine
 // ═══════════════════════════════════════════════════════════════════════════
+group("db.js · the event axis — normalizeKind / normalizeEventType");
+
+assertDeepEqual(KINDS, ["record", "event"], "exactly two kinds");
+assertEqual(normalizeKind("event"), "event", "a known kind survives");
+assertEqual(normalizeKind("record"), "record", "…both of them");
+assertEqual(normalizeKind(undefined), "record",
+  "a row stored before the event axis existed IS a record — this is the whole migration");
+assertEqual(normalizeKind(""), "record", "an empty kind is a record");
+assertEqual(normalizeKind("nonsense"), "record", "an unknown kind falls back rather than vanishing");
+assertEqual(normalizeKind(null), "record", "null is a record");
+
+assertEqual(normalizeEventType("maintenance", "event"), "maintenance", "a known event type survives");
+assertEqual(normalizeEventType("nonsense", "event"), DEFAULT_EVENT_TYPE,
+  "an unknown event type lands in the catch-all, so it is still reachable by a filter chip");
+assertEqual(normalizeEventType(undefined, "event"), DEFAULT_EVENT_TYPE, "a missing one does too");
+assertEqual(normalizeEventType("maintenance", "record"), "",
+  "a RECORD never keeps an event type — it would put a ghost in the timeline's chip counts");
+assertEqual(normalizeEventType("maintenance"), "", "…and the default kind is record");
+assertTrue(EVENT_TYPES.includes(DEFAULT_EVENT_TYPE), "the fallback is itself a valid event type");
+
+{
+  const event = makeRecord({ kind: "event", eventType: "incident", occurredAt: "2026-03-04" });
+  assertEqual(event.kind, "event", "makeRecord builds an event when asked");
+  assertEqual(event.eventType, "incident", "…keeping its event type");
+  assertEqual(event.occurredAt, "2026-03-04", "…and when it happened");
+
+  const demoted = hydrateRecord({ id: "x", kind: "record", eventType: "incident" });
+  assertEqual(demoted.eventType, "", "hydration strips an event type off a record");
+}
+{
+  // The read-time migration §6 mandates: an untouched pre-event record.
+  const old = hydrateRecord({ id: "old", title: "CV-ketel", type: "devices" });
+  assertEqual(old.kind, "record", "an existing record hydrates as a record");
+  assertEqual(old.occurredAt, null, "…with no occurredAt");
+  assertEqual(old.amount, null, "…no amount");
+  assertEqual(old.recurrence, null, "…and no recurrence");
+}
+{
+  // The migration must be invisible to the merge. If hydration moved
+  // updatedAt, every device would think it had the newest copy of everything
+  // the moment it upgraded, and the first sync would be a free-for-all.
+  const stored = { id: "old", title: "CV-ketel", updatedAt: "2026-01-01T00:00:00.000Z" };
+  const hydrated = hydrateRecord(stored);
+  assertEqual(hydrated.updatedAt, "2026-01-01T00:00:00.000Z",
+    "hydration adds the new fields WITHOUT touching updatedAt, so it can never win a merge");
+  assertEqual(hydrated.kind, "record", "…while still supplying the new kind");
+}
+
+group("db.js · normalizeRecurrence");
+
+assertEqual(normalizeRecurrence(null), null, "null does not repeat");
+assertEqual(normalizeRecurrence(undefined), null, "undefined does not repeat");
+assertEqual(normalizeRecurrence("yearly"), null, "a bare string is not a rule");
+assertEqual(normalizeRecurrence({ every: "fortnight" }), null, "an unknown unit is not a rule");
+assertDeepEqual(normalizeRecurrence({ every: "year" }), { every: "year", interval: 1 },
+  "a missing interval means every one");
+assertDeepEqual(normalizeRecurrence({ every: "month", interval: 3 }), { every: "month", interval: 3 },
+  "a valid rule survives intact");
+assertDeepEqual(normalizeRecurrence({ every: "day", interval: 0 }), { every: "day", interval: 1 },
+  "interval 0 would never advance — clamped to 1");
+assertDeepEqual(normalizeRecurrence({ every: "week", interval: -4 }), { every: "week", interval: 1 },
+  "a negative interval would run backwards — clamped to 1");
+assertDeepEqual(normalizeRecurrence({ every: "year", interval: 2.7 }), { every: "year", interval: 2 },
+  "a fractional interval is truncated, never left to produce half a month");
+assertDeepEqual(normalizeRecurrence({ every: "year", interval: "5" }), { every: "year", interval: 5 },
+  "a numeric string from a form field is accepted");
+assertDeepEqual(normalizeRecurrence({ every: "year", interval: "x" }), { every: "year", interval: 1 },
+  "an unparseable interval falls back to 1 rather than NaN");
+assertTrue(RECURRENCE_UNITS.includes("quarter"), "quarterly exists — boiler services and water meters");
+
+group("db.js · normalizeAmount");
+
+assertEqual(normalizeAmount(null), null, "null has no amount");
+assertEqual(normalizeAmount(""), null, "an empty form field has no amount");
+assertEqual(normalizeAmount(undefined), null, "undefined has no amount");
+assertEqual(normalizeAmount(0), 0, "zero is a real amount and must not become null");
+assertEqual(normalizeAmount("340.50"), 340.5, "a numeric string from a form field is accepted");
+assertEqual(normalizeAmount(-25), -25, "a refund is negative and stays negative");
+assertEqual(normalizeAmount("abc"), null, "unparseable text is dropped, never stored as NaN");
+assertEqual(normalizeAmount(Infinity), null, "Infinity is not an amount");
+assertEqual(normalizeAmount(NaN), null, "NaN is not an amount");
+
+group("db.js · versionKey (local revision history)");
+
+assertEqual(versionKey("abc", 0), "abc#000000", "sequence 0 is zero-padded");
+assertEqual(versionKey("abc", 12), "abc#000012", "…and so is 12");
+assertTrue(versionKey("abc", 2) < versionKey("abc", 10),
+  "padding is what makes STRING order match chronological order — unpadded, '10' would sort before '2'");
+assertEqual(versionKey("abc", -1), "abc#000000", "a negative sequence clamps rather than breaking the key");
+assertEqual(versionKey("abc", 1.9), "abc#000001", "a fractional sequence truncates");
+{
+  const [lower, upper] = versionKeyRange("abc");
+  assertTrue(lower < versionKey("abc", 0), "the range opens below the first revision");
+  assertTrue(upper > versionKey("abc", 999999), "…and closes above the last");
+  assertTrue(versionKey("abd", 0) > upper,
+    "the next record's keys fall OUTSIDE the range, so a cursor cannot leak another record's history");
+  assertTrue(versionKey("abb", 999999) < lower, "…and neither can the previous record's");
+}
+assertEqual(VERSION_KEEP, 5, "five revisions per record");
+assertEqual(STORE_VERSIONS, "versions", "the store is named");
+
 group("db.js · queryItemSet — filtering");
 
 {
@@ -1462,8 +1629,74 @@ assertDeepEqual(
   ["a", "b"],
   "an unknown sort field falls back rather than throwing"
 );
-assertTrue(SORT_FIELDS.length === 4, "there are four sortable fields");
+assertDeepEqual(
+  SORT_FIELDS,
+  ["updatedAt", "createdAt", "title", "reminderAt", "occurredAt"],
+  "the sortable fields, named — a count alone would not say which one changed"
+);
 assertTrue(typeof makeComparator() === "function", "makeComparator returns a comparator");
+
+group("db.js · queryItemSet — the kind filter");
+
+{
+  const router = fx({ id: "r", type: "devices", title: "Router" });
+  const swap = fx({ id: "e1", kind: "event", eventType: "maintenance", type: "devices",
+                    title: "Filter vervangen", occurredAt: "2026-03-01", linkedIds: ["r"] });
+  const outage = fx({ id: "e2", kind: "event", eventType: "incident", type: "devices",
+                     title: "Stroomstoring", occurredAt: "2026-04-01", linkedIds: ["r"] });
+  const all = [router, swap, outage];
+
+  assertDeepEqual(ids(queryItemSet(all, { kind: "record", sortBy: "title" })), ["r"],
+    "the overview asks for records and gets only the router");
+  assertDeepEqual(ids(queryItemSet(all, { kind: "event", sortBy: "occurredAt", sortDir: "asc" })),
+    ["e1", "e2"], "the timeline asks for events and gets them oldest first");
+  assertEqual(queryItemSet(all).total, 3,
+    "no kind means every kind — the trash must keep showing both");
+  assertDeepEqual(ids(queryItemSet(all, { kind: "event", eventType: "incident" })), ["e2"],
+    "event types narrow further");
+  assertDeepEqual(ids(queryItemSet(all, { eventType: "incident" })), ["e2"],
+    "…and can be asked for without naming the kind");
+
+  // An event keeps its subject's type, which is the whole reason `kind` is a
+  // second axis instead of an eighth type.
+  assertEqual(queryItemSet(all, { type: "devices" }).total, 3,
+    "the type chip matches the router AND everything that happened to it");
+  assertDeepEqual(ids(queryItemSet(all, { type: "devices", kind: "record" })), ["r"],
+    "…and the two axes compose");
+}
+{
+  // Rows stored before the event axis existed carry no `kind` at all.
+  const legacy = { id: "legacy", type: "document", title: "Polis",
+                   createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+  assertDeepEqual(ids(queryItemSet([legacy], { kind: "record" })), ["legacy"],
+    "an unhydrated legacy row still answers to kind: record — otherwise upgrading empties the list");
+  assertDeepEqual(ids(queryItemSet([legacy], { kind: "event" })), [],
+    "…and is never mistaken for an event");
+}
+{
+  const dead = fx({ id: "d", kind: "event", deletedAt: "2026-05-01T00:00:00.000Z" });
+  const live = fx({ id: "l", kind: "event" });
+  assertDeepEqual(ids(queryItemSet([dead, live], { kind: "event" })), ["l"],
+    "the kind filter does not resurrect tombstoned events");
+  assertDeepEqual(ids(queryItemSet([dead, live], { onlyDeleted: true })), ["d"],
+    "…and the trash still finds them");
+}
+
+group("db.js · queryItemSet — sorting by occurredAt");
+
+assertTrue(SORT_FIELDS.includes("occurredAt"), "occurredAt is a sortable field");
+{
+  const items = [
+    fx({ id: "none", kind: "event", occurredAt: null }),
+    fx({ id: "old", kind: "event", occurredAt: "2026-01-05" }),
+    fx({ id: "new", kind: "event", occurredAt: "2026-09-05" }),
+  ];
+  assertDeepEqual(ids(queryItemSet(items, { sortBy: "occurredAt" })), ["new", "old", "none"],
+    "newest first by default");
+  assertDeepEqual(ids(queryItemSet(items, { sortBy: "occurredAt", sortDir: "asc" })),
+    ["old", "new", "none"],
+    "ascending puts the oldest first but STILL leaves the undated last — the same rule reminderAt uses");
+}
 
 group("db.js · queryItemSet — pagination");
 
@@ -1533,6 +1766,33 @@ assertEqual(
   0,
   "a malformed reminder date is counted as neither overdue nor due"
 );
+
+{
+  const items = [
+    fx({ id: "r1", type: "devices", title: "CV-ketel", tags: ["huis"] }),
+    fx({ id: "r2", type: "document" }),
+    fx({ id: "e1", kind: "event", type: "devices", eventType: "maintenance",
+         occurredAt: "2026-03-01", tags: ["onderhoud"] }),
+    fx({ id: "e2", kind: "event", type: "devices", eventType: "incident",
+         occurredAt: "2026-04-01", pinned: true }),
+  ];
+  const stats = computeStats(items, "2026-05-01");
+  assertEqual(stats.total, 2, "the total counts what you OWN, not what happened to it");
+  assertEqual(stats.byType.devices, 1, "one device, not one device plus two things that happened to it");
+  assertEqual(stats.events, 2, "events are counted separately so the timeline can show a total");
+  assertEqual(stats.pinned, 0, "a pinned event does not inflate the pinned tile");
+  assertEqual(stats.tags, 1, "an event's tags stay out of the record tag count");
+}
+{
+  const items = [
+    fx({ id: "r", createdAt: "2026-04-06T00:00:00.000Z" }),
+    fx({ id: "e", kind: "event", createdAt: "2026-04-06T00:00:00.000Z" }),
+  ];
+  const all = bucketItemsByWeek(items, 2, { field: "createdAt", today: "2026-04-08" });
+  const records = bucketItemsByWeek(items, 2, { field: "createdAt", today: "2026-04-08", kind: "record" });
+  assertEqual(all[1].count, 2, "without a kind the chart counts everything");
+  assertEqual(records[1].count, 1, "the insights chart asks for records, matching the tiles above it");
+}
 
 group("db.js · weekStart / bucketItemsByWeek");
 
@@ -1766,7 +2026,7 @@ group("db.js · IndexedDB — meta");
   assertEqual(await getMeta("theme", "gone"), "gone", "a deleted key falls back again");
 }
 
-group("db.js · IndexedDB — activity log");
+group("db.js · IndexedDB — sync log");
 
 {
   await clearActivityLog();
@@ -1779,6 +2039,39 @@ group("db.js · IndexedDB — activity log");
   assertEqual(log[0].outcome, "skipped", "a skip reason is recorded, or sync looks broken");
   await clearActivityLog();
   assertDeepEqual(await getActivityLog(), [], "the log clears");
+}
+
+group("db.js · IndexedDB — the v2 upgrade");
+
+{
+  // Everything above this line already proved the three original stores work.
+  // This proves the version bump actually created the fourth one, rather than
+  // silently leaving it out and failing on the first write next phase.
+  const db = await openDB();
+  assertTrue(db.objectStoreNames.contains(STORE_VERSIONS),
+    "the versions store exists after the v2 upgrade");
+  assertTrue(db.objectStoreNames.contains("items"), "…and items survived the upgrade");
+  assertTrue(db.objectStoreNames.contains("media"), "…and media");
+  assertTrue(db.objectStoreNames.contains("meta"), "…and meta");
+  assertEqual(db.version, 2, "the database is at version 2");
+}
+{
+  // An event is a record as far as storage is concerned. If that ever stops
+  // being true, everything the timeline inherits for free stops working.
+  const event = makeRecord({
+    kind: "event", eventType: "incident", type: "devices",
+    title: "Stroomstoring", occurredAt: "2026-04-01", amount: 89.5, linkedIds: ["router-id"],
+  });
+  await putItem(event);
+  const back = await getItem(event.id);
+  assertEqual(back.kind, "event", "an event round-trips through the items store");
+  assertEqual(back.eventType, "incident", "…with its event type");
+  assertEqual(back.occurredAt, "2026-04-01", "…its date");
+  assertEqual(back.amount, 89.5, "…and its amount");
+  assertDeepEqual(back.linkedIds, ["router-id"], "…still pointing at its subject");
+
+  const found = await queryItems({ kind: "event" });
+  assertTrue(found.results.some((r) => r.id === event.id), "and the async query finds it by kind");
 }
 
 group("db.js · IndexedDB — media");
@@ -1875,6 +2168,23 @@ group("i18n.js · dictionary parity");
     }
   }
   assertDeepEqual(missing, [], "every record type has a label in both languages");
+}
+{
+  const missing = [];
+  for (const lang of ["nl", "en"]) {
+    setLang(lang);
+    for (const eventType of EVENT_TYPES) {
+      if (eventTypeLabel(eventType) === `eventType.${eventType}`) missing.push(`${lang}:${eventType}`);
+    }
+    for (const kind of KINDS) {
+      if (kindLabel(kind) === `kind.${kind}`) missing.push(`${lang}:${kind}`);
+    }
+  }
+  assertDeepEqual(missing, [], "every event type and kind has a label in both languages");
+  setLang("nl");
+  assertEqual(eventTypeLabel("incident"), "Storing", "the Dutch label is the household word, not a calque");
+  setLang("en");
+  assertEqual(eventTypeLabel("incident"), "Incident", "…and the English one reads plainly");
 }
 
 setLang(langBefore);

@@ -1,5 +1,5 @@
 /**
- * view-activity.js — the sync activity log (BLUEPRINT §4, §8.4).
+ * view-synclog.js — the sync log (BLUEPRINT §4, §8.4).
  *
  * This is the app's black box. When someone says "sync isn't working", this is
  * the first and usually the only diagnostic needed — which is why every SKIP
@@ -7,7 +7,14 @@
  * OAuth tokens last about an hour with no silent refresh (§13.5); without a
  * line saying so, working software looks broken.
  *
- * The log is local only and is never synced.
+ * The log is local only, capped at ACTIVITY_CAP entries, and never synced.
+ *
+ * ── Named "sync log", not "activity" ───────────────────────────────────────
+ * It reports what the SYNC ENGINE did. The timeline of what happened around
+ * the house is a different feature backed by real records, and two screens
+ * called "activity" would send people to the wrong one every time. The storage
+ * helpers in db.js keep the older `activity` naming — they describe this
+ * buffer accurately and renaming them would churn sync.js for no user gain.
  */
 
 import { state } from "./state.js";
@@ -19,12 +26,12 @@ import { formatDateTime, confirmDialog, toast } from "./ui.js";
 const $ = (id) => document.getElementById(id);
 let root;
 
-export function initActivityView() {
-  root = $("activity-body");
-  root.className = "view__body activity";
+export function initSyncLogView() {
+  root = $("synclog-body");
+  root.className = "view__body synclog";
 }
 
-export async function renderActivity() {
+export async function renderSyncLog() {
   if (!root) return;
   const entries = await getActivityLog();
   root.textContent = "";
@@ -37,10 +44,10 @@ export async function renderActivity() {
     glyph.innerHTML = icon("activity", { size: 44 });
     const title = document.createElement("p");
     title.className = "placeholder__title";
-    title.textContent = t("activity.empty.title");
+    title.textContent = t("synclog.empty.title");
     const body = document.createElement("p");
     body.className = "placeholder__body";
-    body.textContent = t("activity.empty.body");
+    body.textContent = t("synclog.empty.body");
     empty.append(glyph, title, body);
     root.append(empty);
     return;
@@ -48,7 +55,7 @@ export async function renderActivity() {
 
   const hint = document.createElement("p");
   hint.className = "field__hint";
-  hint.textContent = t("activity.hint");
+  hint.textContent = t("synclog.hint");
   root.append(hint);
 
   const list = document.createElement("div");
@@ -59,12 +66,12 @@ export async function renderActivity() {
   const clear = document.createElement("button");
   clear.type = "button";
   clear.className = "btn btn--ghost btn--small";
-  clear.textContent = t("activity.clear");
+  clear.textContent = t("synclog.clear");
   clear.addEventListener("click", async () => {
-    if (!(await confirmDialog(t("activity.clear.confirm"), t("activity.clear")))) return;
+    if (!(await confirmDialog(t("synclog.clear.confirm"), t("synclog.clear")))) return;
     await clearActivityLog();
-    toast(t("activity.cleared"), "info", { duration: 1800 });
-    await renderActivity();
+    toast(t("synclog.cleared"), "info", { duration: 1800 });
+    await renderSyncLog();
   });
   root.append(clear);
 }
@@ -82,7 +89,7 @@ function buildRow(entry) {
 
   const head = document.createElement("span");
   head.className = "log__head";
-  head.textContent = `${t(`activity.kind.${entry.kind}`)} · ${t(`activity.outcome.${entry.outcome}`)}`;
+  head.textContent = `${t(`synclog.kind.${entry.kind}`)} · ${t(`synclog.outcome.${entry.outcome}`)}`;
 
   const when = document.createElement("span");
   when.className = "log__when";
@@ -100,6 +107,6 @@ function buildRow(entry) {
   return row;
 }
 
-export function refreshActivityLanguage() {
-  if (!$("view-activity").hidden) renderActivity();
+export function refreshSyncLogLanguage() {
+  if (!$("view-synclog").hidden) renderSyncLog();
 }

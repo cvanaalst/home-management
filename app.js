@@ -48,7 +48,7 @@ import {
 } from "./view-settings.js";
 import { initReportView, renderReport } from "./view-report.js";
 import { initTrashView, renderTrash, refreshTrashLanguage } from "./view-trash.js";
-import { initActivityView, renderActivity, refreshActivityLanguage } from "./view-activity.js";
+import { initSyncLogView, renderSyncLog, refreshSyncLogLanguage } from "./view-synclog.js";
 import { consumeRedirectResult, maybeAutoSync, syncNow } from "./sync.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -59,7 +59,7 @@ import { consumeRedirectResult, maybeAutoSync, syncNow } from "./sync.js";
 const BASE_TABS = ["list", "settings"];
 
 /** Everything reached from a tab. These PUSH an entry and animate forward. */
-const PUSH_TARGETS = ["detail", "add", "report", "trash", "activity", "help"];
+const PUSH_TARGETS = ["detail", "add", "report", "trash", "synclog", "help"];
 
 const ALL_VIEWS = [...BASE_TABS, ...PUSH_TARGETS];
 
@@ -171,7 +171,7 @@ export async function navigate(view, { id = null, fromPop = false } = {}) {
     paintInstall();
   }
   if (view === "trash") await renderTrash();
-  if (view === "activity") await renderActivity();
+  if (view === "synclog") await renderSyncLog();
   if (view === "help") renderHelp();
 
   rememberScroll();
@@ -242,7 +242,7 @@ function refreshLanguage() {
   refreshListLanguage();
   refreshDetailLanguage();
   refreshTrashLanguage();
-  refreshActivityLanguage();
+  refreshSyncLogLanguage();
   if (state.currentView === "report") renderReport();
 }
 
@@ -484,7 +484,7 @@ function initViews() {
     onOpen: (id) => navigate("detail", { id }),
   });
 
-  initActivityView();
+  initSyncLogView();
 
   initSettingsView({
     onNavigate: (view) => navigate(view),

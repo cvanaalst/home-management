@@ -580,17 +580,50 @@ function describe(stats, media) {
   return parts.length ? parts.join(" ") : "no changes";
 }
 
-function parseItems(text) {
+/**
+ * Read a sync payload. THROWS on anything it does not understand.
+ *
+ * ── Why this refuses instead of shrugging ──────────────────────────────────
+ * It used to return [] for an unreadable file, on the reasoning that a corrupt
+ * remote must not destroy the local set. That reasoning inverts as soon as the
+ * payload can legitimately be something this build cannot read — an encrypted
+ * envelope, or any future format. An empty parse merges to "the remote has
+ * nothing", and step 5 then uploads this device's plaintext set straight over
+ * it. One device left on an old build would silently undo the encryption and
+ * republish every account number in the clear, and the only trace would be a
+ * successful-looking sync.
+ *
+ * So: an unrecognised payload aborts the sync. Nothing is read, nothing is
+ * written, and the sync log says why. Ten rolling backups are the recovery
+ * path for a genuinely corrupt file — a blind overwrite never was one.
+ *
+ * A zero-byte file is the one benign case (Drive can hand back an empty
+ * placeholder) and still reads as empty.
+ */
+export function parseItems(text) {
+  if (!String(text || "").trim()) return [];
+
+  let parsed;
   try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && Array.isArray(parsed.items)) return parsed.items;
-    return [];
-  } catch {
-    // A corrupt remote file must not destroy the local set: treat it as empty
-    // and let the write-back replace it.
-    return [];
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new SyncError("unreadable", `not JSON: ${String(err.message || err).slice(0, 80)}`);
   }
+
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === "object" && Array.isArray(parsed.items)) return parsed.items;
+
+  // Recognisably a payload, just not one this build speaks. Name the version so
+  // the sync log says "upgrade this device" rather than "something went wrong".
+  if (parsed && typeof parsed === "object") {
+    const version = parsed.v ?? parsed.version;
+    throw new SyncError(
+      "unsupported-format",
+      version !== undefined ? `payload v${version}` : "unknown payload shape"
+    );
+  }
+
+  throw new SyncError("unreadable", `unexpected ${typeof parsed}`);
 }
 
 function serialiseItems(records) {
@@ -823,7 +856,16 @@ export async function restoreBackup(fileId, mode = "merge") {
 
 /** Import a JSON export from disk through the same merge path (§2.3, §8.3). */
 export async function importJson(text, mode = "merge") {
-  const incoming = parseItems(text);
+  let incoming;
+  try {
+    incoming = parseItems(text);
+  } catch (err) {
+    // Someone picked the wrong file, or an encrypted export. Either way this is
+    // a user mistake, not a fault — report it and leave the store untouched.
+    const detail = err instanceof SyncError ? err.code : String(err.message || err);
+    await logActivity("restore", "error", `import ${detail}`);
+    return { error: detail };
+  }
   if (!incoming.length) return { error: "empty" };
   if (mode === "replace") {
     await clearItems();

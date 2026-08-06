@@ -18,7 +18,7 @@
  * wonder why the suite stopped updating.
  */
 
-const CACHE_VERSION = "hms-v22";
+const CACHE_VERSION = "hms-v23";
 
 const PRECACHE = [
   "./",
@@ -47,7 +47,7 @@ const PRECACHE = [
   "view-settings.js",
   "view-report.js",
   "view-trash.js",
-  "view-activity.js",
+  "view-synclog.js",
 
   // assets
   "fonts/display.woff2",

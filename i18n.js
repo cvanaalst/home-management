@@ -36,7 +36,7 @@ const dict = {
     "view.settings.title": "Instellingen",
     "view.report.title": "Inzichten",
     "view.trash.title": "Onlangs verwijderd",
-    "view.activity.title": "Activiteit",
+    "view.synclog.title": "Synclogboek",
     "view.help.title": "Help",
 
     // ── record types ────────────────────────────────────────────────────────
@@ -49,6 +49,18 @@ const dict = {
     "type.various": "Diversen",
     "type.all": "Alles",
     "type.label": "Soort",
+
+    // ── the event axis (§5) ─────────────────────────────────────────────────
+    "kind.record": "Gegeven",
+    "kind.event": "Gebeurtenis",
+    "eventType.maintenance": "Onderhoud",
+    "eventType.payment": "Betaling",
+    "eventType.incident": "Storing",
+    "eventType.change": "Wijziging",
+    "eventType.reading": "Meterstand",
+    "eventType.other": "Overig",
+    "eventType.all": "Alles",
+    "eventType.label": "Wat gebeurde er",
 
     // ── list view ───────────────────────────────────────────────────────────
     "list.search": "Zoeken…",
@@ -178,7 +190,7 @@ const dict = {
     "settings.export": "Exporteren",
     "settings.report": "Inzichten",
     "settings.trash": "Onlangs verwijderd",
-    "settings.activity": "Activiteit",
+    "settings.synclog": "Synclogboek",
     "settings.print": "Afdrukken",
     "settings.about": "Over",
     "settings.help": "Help",
@@ -328,21 +340,21 @@ const dict = {
       "„{title}” wordt definitief gewist. De inhoud en de bestanden zijn dan echt weg — dit kan niet ongedaan gemaakt worden.",
     "trash.purged": "Definitief gewist",
 
-    // ── activity log (§8.4) ─────────────────────────────────────────────────
-    "activity.hint":
+    // ── sync log (§8.4) ─────────────────────────────────────────────────────
+    "synclog.hint":
       "Het logboek van deze app. Ook overgeslagen synchronisaties staan erin — dat is normaal: een aanmelding vervalt na ongeveer een uur.",
-    "activity.empty.title": "Nog geen activiteit",
-    "activity.empty.body": "Zodra je synchroniseert of een back-up maakt, staat het hier.",
-    "activity.clear": "Logboek wissen",
-    "activity.clear.confirm": "Het volledige logboek wissen?",
-    "activity.cleared": "Logboek gewist",
-    "activity.kind.sync": "Synchronisatie",
-    "activity.kind.autosync": "Automatisch",
-    "activity.kind.backup": "Back-up",
-    "activity.kind.restore": "Terugzetten",
-    "activity.outcome.success": "Gelukt",
-    "activity.outcome.error": "Mislukt",
-    "activity.outcome.skipped": "Overgeslagen",
+    "synclog.empty.title": "Nog niets gesynchroniseerd",
+    "synclog.empty.body": "Zodra je synchroniseert of een back-up maakt, staat het hier.",
+    "synclog.clear": "Logboek wissen",
+    "synclog.clear.confirm": "Het volledige logboek wissen?",
+    "synclog.cleared": "Logboek gewist",
+    "synclog.kind.sync": "Synchronisatie",
+    "synclog.kind.autosync": "Automatisch",
+    "synclog.kind.backup": "Back-up",
+    "synclog.kind.restore": "Terugzetten",
+    "synclog.outcome.success": "Gelukt",
+    "synclog.outcome.error": "Mislukt",
+    "synclog.outcome.skipped": "Overgeslagen",
 
     // ── read-only lock ──────────────────────────────────────────────────────
     "lock.locked": "Vergrendeld",
@@ -421,7 +433,7 @@ const dict = {
     "view.settings.title": "Settings",
     "view.report.title": "Insights",
     "view.trash.title": "Recently deleted",
-    "view.activity.title": "Activity",
+    "view.synclog.title": "Sync log",
     "view.help.title": "Help",
 
     // ── record types ────────────────────────────────────────────────────────
@@ -434,6 +446,18 @@ const dict = {
     "type.various": "Various",
     "type.all": "All",
     "type.label": "Type",
+
+    // ── the event axis (§5) ─────────────────────────────────────────────────
+    "kind.record": "Record",
+    "kind.event": "Event",
+    "eventType.maintenance": "Maintenance",
+    "eventType.payment": "Payment",
+    "eventType.incident": "Incident",
+    "eventType.change": "Change",
+    "eventType.reading": "Reading",
+    "eventType.other": "Other",
+    "eventType.all": "All",
+    "eventType.label": "What happened",
 
     // ── list view ───────────────────────────────────────────────────────────
     "list.search": "Search…",
@@ -563,7 +587,7 @@ const dict = {
     "settings.export": "Export",
     "settings.report": "Insights",
     "settings.trash": "Recently deleted",
-    "settings.activity": "Activity",
+    "settings.synclog": "Sync log",
     "settings.print": "Print",
     "settings.about": "About",
     "settings.help": "Help",
@@ -713,21 +737,21 @@ const dict = {
       "“{title}” will be deleted forever. Its content and files really are gone after this — it cannot be undone.",
     "trash.purged": "Deleted forever",
 
-    // ── activity log (§8.4) ─────────────────────────────────────────────────
-    "activity.hint":
+    // ── sync log (§8.4) ─────────────────────────────────────────────────────
+    "synclog.hint":
       "This app's black box. Skipped syncs are in here too — that is normal: a sign-in lapses after about an hour.",
-    "activity.empty.title": "No activity yet",
-    "activity.empty.body": "As soon as you sync or back up, it shows up here.",
-    "activity.clear": "Clear the log",
-    "activity.clear.confirm": "Clear the whole log?",
-    "activity.cleared": "Log cleared",
-    "activity.kind.sync": "Sync",
-    "activity.kind.autosync": "Automatic",
-    "activity.kind.backup": "Backup",
-    "activity.kind.restore": "Restore",
-    "activity.outcome.success": "Succeeded",
-    "activity.outcome.error": "Failed",
-    "activity.outcome.skipped": "Skipped",
+    "synclog.empty.title": "Nothing synced yet",
+    "synclog.empty.body": "As soon as you sync or back up, it shows up here.",
+    "synclog.clear": "Clear the log",
+    "synclog.clear.confirm": "Clear the whole log?",
+    "synclog.cleared": "Log cleared",
+    "synclog.kind.sync": "Sync",
+    "synclog.kind.autosync": "Automatic",
+    "synclog.kind.backup": "Backup",
+    "synclog.kind.restore": "Restore",
+    "synclog.outcome.success": "Succeeded",
+    "synclog.outcome.error": "Failed",
+    "synclog.outcome.skipped": "Skipped",
 
     // ── read-only lock ──────────────────────────────────────────────────────
     "lock.locked": "Locked",
@@ -816,6 +840,16 @@ export function tCount(key, count) {
 /** Localised label for a record type. */
 export function typeLabel(type) {
   return t(`type.${type}`);
+}
+
+/** Localised label for an event type (§5). */
+export function eventTypeLabel(eventType) {
+  return t(`eventType.${eventType}`);
+}
+
+/** Localised label for the record/event axis. */
+export function kindLabel(kind) {
+  return t(`kind.${kind}`);
 }
 
 /**

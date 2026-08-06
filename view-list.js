@@ -385,6 +385,11 @@ async function paintPage({ keepScroll, seq }) {
   const { results, total } = await queryItems({
     search: state.filters.search,
     type: state.filters.type,
+    // The overview is the things you own. Events belong to the timeline, and
+    // left in here a decade of meter readings would bury every record on the
+    // first page. Asked for explicitly rather than defaulted inside
+    // queryItemSet, so the trash — which must show both — stays neutral.
+    kind: "record",
     tags: state.filters.tags,
     sortBy: state.filters.sortBy,
     sortDir: state.filters.sortDir,

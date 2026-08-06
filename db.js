@@ -11,10 +11,11 @@
  * `queryItemSet(await getAllItems(), opts)`, so the part that is easy to get
  * wrong is the part that is easy to test.
  *
- * Three stores (§5):
- *   items  key `id`   the records
- *   media  key `id`   { id, blob, thumbnailBlob } — binary kept out of records
- *   meta   key `key`  settings, lastSyncAt, activity log
+ * Four stores (§5):
+ *   items     key `id`   records AND events — see the note on `kind` below
+ *   media     key `id`   { id, blob, thumbnailBlob } — binary kept out of records
+ *   meta      key `key`  settings, lastSyncAt, sync log
+ *   versions  key `key`  per-record revision history, local only, never synced
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -67,7 +68,90 @@ export function normalizeType(type) {
   return LEGACY_TYPES[type] || DEFAULT_TYPE;
 }
 
-export const SORT_FIELDS = ["updatedAt", "createdAt", "title", "reminderAt"];
+/**
+ * ── The second axis: what a row IS, as opposed to what it is ABOUT ──────────
+ *
+ * A "record" documents something that exists — the router, the insurance
+ * policy, the boiler. An "event" records something that HAPPENED to one of
+ * them: the filter was changed, the yearly premium was paid, the power failed.
+ *
+ * Both live in the same store and share the whole envelope, so events inherit
+ * sync, merge, tombstones, trash, search, tags, links and attachments without
+ * a second implementation of any of it. `kind` is what keeps them apart, and
+ * it is deliberately NOT an eighth `type`: an event about the router is still
+ * `type: "devices"`, so it keeps that colour, icon and filter chip.
+ *
+ * Anything stored before this existed has no `kind` at all and normalises to
+ * "record", which is exactly right.
+ */
+export const KINDS = ["record", "event"];
+export const DEFAULT_KIND = "record";
+
+/** Resolve any stored kind to a current one. PURE. */
+export function normalizeKind(kind) {
+  return KINDS.includes(kind) ? kind : DEFAULT_KIND;
+}
+
+/**
+ * What sort of thing happened. Drives the timeline's icons and filter chips,
+ * which is why this is a fixed set and `reminderType` is free text — a chip row
+ * cannot be built from values nobody has typed yet.
+ */
+export const EVENT_TYPES = [
+  "maintenance", // serviced, cleaned, replaced a part
+  "payment", // premium, invoice, call-out charge
+  "incident", // failure, outage, leak, damage
+  "change", // added, moved, reconfigured
+  "reading", // meter reading, measurement
+  "other",
+];
+
+export const DEFAULT_EVENT_TYPE = "other";
+
+/**
+ * Resolve an event type. PURE.
+ *
+ * Records always resolve to "" — an event type on something that never happened
+ * is meaningless, and letting one linger would put ghost entries in the
+ * timeline's chip counts.
+ */
+export function normalizeEventType(value, kind = DEFAULT_KIND) {
+  if (normalizeKind(kind) !== "event") return "";
+  return EVENT_TYPES.includes(value) ? value : DEFAULT_EVENT_TYPE;
+}
+
+/** How a reminder repeats. The arithmetic itself arrives with the next phase. */
+export const RECURRENCE_UNITS = ["day", "week", "month", "quarter", "year"];
+
+/**
+ * Resolve a stored recurrence to `{ every, interval }` or null. PURE.
+ *
+ * Anything malformed becomes null rather than a half-built rule: a recurrence
+ * that cannot be computed must read as "does not repeat", never as "repeats on
+ * a schedule nobody can predict".
+ */
+export function normalizeRecurrence(value) {
+  if (!value || typeof value !== "object") return null;
+  if (!RECURRENCE_UNITS.includes(value.every)) return null;
+  const interval = Math.trunc(Number(value.interval));
+  return { every: value.every, interval: Number.isFinite(interval) && interval > 0 ? interval : 1 };
+}
+
+/** Resolve a stored amount to a finite number or null. PURE. */
+export function normalizeAmount(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+export const SORT_FIELDS = ["updatedAt", "createdAt", "title", "reminderAt", "occurredAt"];
+
+/**
+ * Date fields that are legitimately absent on most rows, and must therefore
+ * sort to the END in BOTH directions. Ascending on `occurredAt` would otherwise
+ * open with every record that never happened, which is not what the sort means.
+ */
+const SPARSE_DATE_FIELDS = new Set(["reminderAt", "occurredAt"]);
 
 /**
  * ── The record contract (§5) ────────────────────────────────────────────────
@@ -96,9 +180,21 @@ export const SORT_FIELDS = ["updatedAt", "createdAt", "title", "reminderAt"];
  *   reminderType: "",            // at most ONE per record. Free text, suggested
  *                                //  from values already used. Only meaningful
  *                                //  when reminderAt is set.
+ *   recurrence:   null,          // { every: "year", interval: 1 } or null
  *   links:        [],            // [{ id, label, url }]        — N per record
  *   attachments:  [],            // [{ mediaId, filename, mimeType, size }]
+ *
+ *   // ── the event axis ──────────────────────────────────────────────────
+ *   kind:         "record",      // "record" | "event"
+ *   occurredAt:   null,          // "YYYY-MM-DD" — when it HAPPENED. Events only.
+ *   eventType:    "",            // one of EVENT_TYPES. Events only.
+ *   amount:       null,          // optional number, e.g. what a call-out cost
  * }
+ *
+ * An event points AT its subject through `linkedIds`; the subject is never
+ * touched. That matters for merging: logging fifty events against the boiler
+ * leaves the boiler's own `updatedAt` alone, so none of them can lose a race
+ * with an edit made on another device.
  *
  * ── Deviations from the blueprint envelope, and why ─────────────────────────
  * §5 gives a single `mediaId`/`filename`/`mimeType` triplet. The legacy app
@@ -149,8 +245,14 @@ export function makeRecord(fields = {}) {
 
     body: fields.body || "",
     reminderType: fields.reminderType || "",
+    recurrence: normalizeRecurrence(fields.recurrence),
     links: Array.isArray(fields.links) ? [...fields.links] : [],
     attachments: Array.isArray(fields.attachments) ? [...fields.attachments] : [],
+
+    kind: normalizeKind(fields.kind),
+    occurredAt: fields.occurredAt || null,
+    eventType: normalizeEventType(fields.eventType, fields.kind),
+    amount: normalizeAmount(fields.amount),
   };
 }
 
@@ -183,6 +285,12 @@ function coerce(raw) {
     restoredAt: raw.restoredAt ?? null,
     purgedAt: raw.purgedAt ?? null,
     reminderAt: raw.reminderAt || null,
+    recurrence: normalizeRecurrence(raw.recurrence),
+
+    kind: normalizeKind(raw.kind),
+    occurredAt: raw.occurredAt || null,
+    eventType: normalizeEventType(raw.eventType, raw.kind),
+    amount: normalizeAmount(raw.amount),
   };
 }
 
@@ -330,8 +438,10 @@ function tidy(parsed) {
  * @param {{
  *   search?: string,          all whitespace-separated terms must match (AND)
  *   type?: string,            "" = every type
+ *   kind?: string,            "" = every kind; "record" or "event" narrows
+ *   eventType?: string,       "" = every event type
  *   tags?: string[],          ALL listed tags must be present (AND)
- *   sortBy?: string,          updatedAt | createdAt | title | reminderAt
+ *   sortBy?: string,          updatedAt | createdAt | title | reminderAt | occurredAt
  *   sortDir?: "asc"|"desc",
  *   dateFrom?: string,        "YYYY-MM-DD", inclusive
  *   dateTo?: string,          "YYYY-MM-DD", inclusive
@@ -347,6 +457,8 @@ export function queryItemSet(items, opts = {}) {
   const {
     search = "",
     type = "",
+    kind = "",
+    eventType = "",
     tags = [],
     sortBy = "updatedAt",
     sortDir = "desc",
@@ -370,6 +482,11 @@ export function queryItemSet(items, opts = {}) {
     if (item.deletedAt ? !onlyDeleted : onlyDeleted) return false;
 
     if (type && item.type !== type) return false;
+
+    // Through normalizeKind, not item.kind, so a record written before the
+    // event axis existed still answers to kind: "record".
+    if (kind && normalizeKind(item.kind) !== kind) return false;
+    if (eventType && item.eventType !== eventType) return false;
 
     if (wantedTags.length) {
       const has = (item.tags || []).map(normalizeSearchText);
@@ -414,12 +531,13 @@ export function makeComparator(sortBy = "updatedAt", sortDir = "desc", pinnedFir
         sensitivity: "base",
       });
       if (cmp !== 0) return cmp * dir;
-    } else if (field === "reminderAt") {
-      // A record with no reminder sorts last in BOTH directions. Ascending
-      // would otherwise open with a wall of records that have no reminder,
-      // which is never what "sort by reminder" means.
-      const av = a.reminderAt || "";
-      const bv = b.reminderAt || "";
+    } else if (SPARSE_DATE_FIELDS.has(field)) {
+      // A row without this date sorts last in BOTH directions. Ascending would
+      // otherwise open with a wall of rows that have no reminder — or, on
+      // occurredAt, with every record that never happened — which is never what
+      // the sort was asked for.
+      const av = a[field] || "";
+      const bv = b[field] || "";
       if (!av !== !bv) return av ? -1 : 1;
       if (av !== bv) return (av < bv ? -1 : 1) * dir;
     } else {
@@ -458,7 +576,14 @@ export function weekStart(day) {
  * deterministic and testable.
  */
 export function computeStats(items, today) {
-  const live = (items || []).filter((i) => i && !i.deletedAt);
+  const alive = (items || []).filter((i) => i && !i.deletedAt);
+
+  // Insights describe the things you OWN. Events are what happened to them, and
+  // counting a decade of boiler services as "12 devices" would make every tile
+  // on the page a lie.
+  const live = alive.filter((i) => normalizeKind(i.kind) === "record");
+  const events = alive.length - live.length;
+
   const byType = Object.fromEntries(TYPES.map((t) => [t, 0]));
   const tags = new Set();
   let pinned = 0;
@@ -488,6 +613,9 @@ export function computeStats(items, today) {
 
   return {
     total: live.length,
+    events,
+    // Deliberately counts tombstoned events too: the trash shows both, so a
+    // count that disagreed with it would look like a bug.
     deleted: (items || []).filter((i) => i && i.deletedAt && !i.purgedAt).length,
     byType,
     pinned,
@@ -516,7 +644,7 @@ function daysBetween(dayIso, todayIso) {
  * `weeks` consecutive weekly buckets ending with the week containing `today`,
  * oldest first. PURE. Feeds the hand-drawn SVG bar chart in §8.8.
  */
-export function bucketItemsByWeek(items, weeks = 12, { field = "createdAt", today } = {}) {
+export function bucketItemsByWeek(items, weeks = 12, { field = "createdAt", today, kind = "" } = {}) {
   const anchor = weekStart(today || localDay(new Date()));
   if (!anchor) return [];
 
@@ -533,6 +661,7 @@ export function bucketItemsByWeek(items, weeks = 12, { field = "createdAt", toda
 
   for (const item of items || []) {
     if (!item || item.deletedAt || !item[field]) continue;
+    if (kind && normalizeKind(item.kind) !== kind) continue;
     const bucket = index.get(weekStart(item[field]));
     if (bucket !== undefined) buckets[bucket].count++;
   }
@@ -638,8 +767,40 @@ export function appendActivity(log, entry, cap = ACTIVITY_CAP) {
 export const STORE_ITEMS = "items";
 export const STORE_MEDIA = "media";
 export const STORE_META = "meta";
+export const STORE_VERSIONS = "versions";
 
-const DB_VERSION = 1;
+/**
+ * How many past revisions of a record are kept. Local only — see the note on
+ * versionKey() for why they are never synced.
+ */
+export const VERSION_KEEP = 5;
+
+/**
+ * Primary key for one stored revision: `<recordId>#<zero-padded seq>`.
+ *
+ * The padding is what makes this work without an index. String order over these
+ * keys IS chronological order within a record, and every revision of one record
+ * forms a contiguous run, so a cursor over versionKeyRange() reads exactly that
+ * record's history — no secondary index, in keeping with §6.
+ *
+ * Six digits caps a record at a million revisions, which at five kept is
+ * roughly two hundred thousand more than anyone will reach.
+ *
+ * These never leave the device. Last-write-wins discards the losing record
+ * whole, so history kept INSIDE the record would vanish together with the edit
+ * you wanted it for — which is precisely the case it exists to cover.
+ */
+export function versionKey(recordId, seq) {
+  const n = Math.max(0, Math.trunc(Number(seq) || 0));
+  return `${recordId}#${String(n).padStart(6, "0")}`;
+}
+
+/** Inclusive `[lower, upper]` bounds covering every revision of one record. */
+export function versionKeyRange(recordId) {
+  return [`${recordId}#`, `${recordId}#￿`];
+}
+
+const DB_VERSION = 2;
 let dbName = "huisbeheer";
 let dbPromise = null;
 
@@ -679,6 +840,10 @@ export function openDB() {
       }
       if (!db.objectStoreNames.contains(STORE_META)) {
         db.createObjectStore(STORE_META, { keyPath: "key" });
+      }
+      // v2 — per-record revision history, written from the next phase onward.
+      if (!db.objectStoreNames.contains(STORE_VERSIONS)) {
+        db.createObjectStore(STORE_VERSIONS, { keyPath: "key" });
       }
     };
 

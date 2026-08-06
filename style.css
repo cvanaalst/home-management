@@ -2139,7 +2139,7 @@ body:not(.is-locked) .detail__title {
 }
 
 /* ==========================================================================
-   12i. Sync panel, trash, activity log
+   12i. Sync panel, trash, sync log
    ========================================================================== */
 
 .button-row {
@@ -2183,7 +2183,7 @@ body:not(.is-locked) .detail__title {
 
 /* ── Activity log ──────────────────────────────────────────────────────── */
 
-.activity {
+.synclog {
   gap: var(--space-3);
 }
 
