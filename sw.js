@@ -25,7 +25,7 @@
  * wonder why the suite stopped updating.
  */
 
-const CACHE_VERSION = "hms-v25";
+const CACHE_VERSION = "hms-v26";
 
 const PRECACHE = [
   "./",

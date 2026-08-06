@@ -25,6 +25,7 @@ import {
   refreshListLanguage,
   deleteWithUndo,
   revealFilters,
+  remeasureTypeFilters,
 } from "./view-list.js";
 import {
   initDetailView,
@@ -53,6 +54,7 @@ import {
   initTimelineView,
   renderTimeline,
   refreshTimelineLanguage,
+  remeasureTimelineChips,
 } from "./view-timeline.js";
 import { consumeRedirectResult, maybeAutoSync, syncNow } from "./sync.js";
 
@@ -129,6 +131,14 @@ function renderView(view, id) {
     // Restore scroll only AFTER the swap — restoring onto a short page gets
     // the offset clamped (§13.9).
     section.scrollTop = BASE_TABS.includes(view) ? state.scroll[view] || 0 : 0;
+
+    // Anything that MEASURES has to run here, not before: navigate() loads a
+    // view's data while its section is still hidden, and a hidden section has
+    // no layout — every box reports 0. The collapsible chip rows read a real
+    // chip's height, so measuring early collapsed them to nothing and the
+    // filters simply did not appear until you tabbed in a second time.
+    if (view === "list") remeasureTypeFilters();
+    if (view === "timeline") remeasureTimelineChips();
   };
 
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;

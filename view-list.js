@@ -203,6 +203,16 @@ function measureTypeOverflow() {
   // Measure a real chip rather than assuming, then ask the layout whether the
   // content is taller than that single line.
   const line = Math.round(firstChip.getBoundingClientRect().height);
+
+  // A hidden view has no layout: every box measures 0. Writing that back would
+  // set --chip-line to 0px and collapse the row to nothing, which is exactly
+  // what happened when arriving from another tab — navigate() refreshes the
+  // list BEFORE it unhides the section, so the first measurement ran blind and
+  // the chips vanished until something re-measured them. Bail instead; the
+  // stylesheet's own fallback keeps the row a sensible height, and
+  // remeasureTypeFilters() runs once the view is actually on screen.
+  if (line === 0) return;
+
   row.style.setProperty("--chip-line", `${line}px`);
 
   const wasExpanded = row.dataset.expanded === "true";
@@ -241,6 +251,16 @@ export function paintTypeFilters() {
     chip("", t("type.all"), null) +
     TYPES.map((type) => chip(type, typeLabel(type), `--type-${type}`)).join("");
 
+  measureTypeOverflow();
+}
+
+/**
+ * Re-measure once the view is genuinely on screen.
+ *
+ * Called by app.js after the view swap. Chip widths depend on layout, and
+ * layout does not exist while the section is hidden — see measureTypeOverflow().
+ */
+export function remeasureTypeFilters() {
   measureTypeOverflow();
 }
 

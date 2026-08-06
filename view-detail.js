@@ -245,6 +245,7 @@ function buildHistory() {
 
 function buildReminder() {
   const wrap = section("field.reminder");
+  el.reminderPanel = wrap;
   const row = document.createElement("div");
   row.className = "detail__grid";
 
@@ -339,6 +340,7 @@ function buildComment() {
 
 function buildLinks() {
   const wrap = section("field.links");
+  el.linksPanel = wrap;
   el.links = document.createElement("div");
   el.links.className = "row-list";
 
@@ -863,6 +865,15 @@ function paintEventPanels(items) {
   const event = isEvent();
   el.eventPanel.hidden = !event;
   paintEventBadge();
+
+  // An event is a thing that already happened, so a reminder on it is a
+  // contradiction — reminders belong on the record it points at. URL links go
+  // for the same reason: an event is a fact, not a place to file references.
+  //
+  // "Linked items" deliberately STAYS: it holds the link back to the subject,
+  // which is what makes the event findable from the boiler's own page.
+  el.reminderPanel.hidden = event;
+  el.linksPanel.hidden = event;
 
   el.historyPanel.hidden = event || isDraft;
   if (el.historyPanel.hidden) return;

@@ -52,6 +52,12 @@ let loaded = 0;
 let lastTotal = 0;
 let searchTimer = null;
 
+/** Whether the event-type row shows every chip or just the first line. */
+let chipsExpanded = false;
+
+/** True when the row opened ITSELF to reveal an active filter (see below). */
+let chipsAutoExpanded = false;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Init
 // ═══════════════════════════════════════════════════════════════════════════
@@ -109,10 +115,27 @@ function buildControls() {
 
   row.append(field, el.filterToggle);
 
+  // Seven event types wrap to three lines on a phone. Same treatment as the
+  // overview's type chips: collapsed to one line, with a toggle that appears
+  // only when they genuinely do not fit.
+  const chipGroup = document.createElement("div");
+  chipGroup.className = "chip-group";
+
   chipRow = document.createElement("div");
-  chipRow.className = "chip-row";
+  chipRow.className = "chip-row chip-row--collapsible";
   chipRow.id = "timeline-event-filters";
   chipRow.setAttribute("role", "group");
+  chipRow.dataset.expanded = "false";
+
+  el.chipToggle = document.createElement("button");
+  el.chipToggle.type = "button";
+  el.chipToggle.className = "chip-group__toggle";
+  el.chipToggle.id = "btn-timeline-types-toggle";
+  el.chipToggle.setAttribute("aria-expanded", "false");
+  el.chipToggle.setAttribute("aria-controls", "timeline-event-filters");
+  el.chipToggle.hidden = true;
+
+  chipGroup.append(chipRow, el.chipToggle);
 
   el.panel = document.createElement("div");
   el.panel.className = "filter-panel";
@@ -120,7 +143,7 @@ function buildControls() {
   el.panel.hidden = true;
   buildPanelBody(el.panel);
 
-  wrap.append(row, chipRow, el.panel);
+  wrap.append(row, chipGroup, el.panel);
   return wrap;
 }
 
@@ -242,6 +265,19 @@ function bindControls() {
 
   el.clear.addEventListener("click", clearFilters);
 
+  el.chipToggle.addEventListener("click", () => {
+    chipsAutoExpanded = false; // an explicit choice outranks the automatic one
+    setChipsExpanded(!chipsExpanded);
+  });
+
+  // Chip widths change with the viewport AND with the language, so "does it
+  // fit?" has to be re-asked rather than answered once.
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(measureChipOverflow, 150);
+  });
+
   loadMoreEl.addEventListener("click", () => {
     loaded += PAGE_SIZE;
     render();
@@ -251,6 +287,59 @@ function bindControls() {
     const row = e.target.closest("[data-id]");
     if (row) callbacks.onOpen(row.dataset.id);
   });
+}
+
+function setChipsExpanded(expanded) {
+  chipsExpanded = expanded;
+  chipRow.dataset.expanded = String(expanded);
+  el.chipToggle.setAttribute("aria-expanded", String(expanded));
+  el.chipToggle.innerHTML = icon("chevronDown", { size: 18 });
+  const label = t(expanded ? "list.types.showLess" : "list.types.showAll");
+  el.chipToggle.setAttribute("aria-label", label);
+  el.chipToggle.title = label;
+}
+
+/**
+ * Show the toggle only when the chips actually overflow one line.
+ *
+ * Measures a real chip rather than assuming, and bails when there is no layout
+ * to measure — a hidden view reports every box as 0, and writing that back
+ * would set --chip-line to 0px and collapse the row to nothing.
+ */
+function measureChipOverflow() {
+  if (!chipRow || !el.chipToggle) return;
+  const firstChip = chipRow.querySelector(".chip");
+  if (!firstChip) return;
+
+  const line = Math.round(firstChip.getBoundingClientRect().height);
+  if (line === 0) return;
+  chipRow.style.setProperty("--chip-line", `${line}px`);
+
+  const wasExpanded = chipRow.dataset.expanded === "true";
+  chipRow.dataset.expanded = "true";
+  const overflows = chipRow.scrollHeight > line + 2;
+  chipRow.dataset.expanded = String(wasExpanded);
+
+  el.chipToggle.hidden = !overflows;
+
+  // A filtered timeline must never hide which filter is active.
+  if (overflows && filters.eventType && !chipsExpanded) {
+    chipsAutoExpanded = true;
+    setChipsExpanded(true);
+    return;
+  }
+  // …and fold back once that reason goes, unless the user opened it by hand.
+  if (chipsAutoExpanded && !filters.eventType) {
+    chipsAutoExpanded = false;
+    setChipsExpanded(false);
+    return;
+  }
+  setChipsExpanded(chipsExpanded && overflows);
+}
+
+/** Re-measure once the view is genuinely on screen. Called by app.js. */
+export function remeasureTimelineChips() {
+  measureChipOverflow();
 }
 
 function clearFilters() {
@@ -296,6 +385,8 @@ function paintChips() {
       chip(eventType, eventTypeLabel(eventType), eventIcon(eventType), `var(--event-${eventType})`)
     );
   }
+
+  measureChipOverflow();
 }
 
 function paintTypeOptions() {
