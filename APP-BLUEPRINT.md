@@ -22,6 +22,15 @@ is **generic platform code** you get in every app. Only Section 14 changes per p
 > session does not re-litigate storage, sync, theming, i18n or release discipline —
 > it goes straight to your app's actual subject matter.
 
+**Read §19 first if you are starting a different kind of app.** Sections 1–18 describe
+one blueprint in detail; **§19 is the part that transfers to any local-first PWA with
+storage and sync**, ordered by how expensive each lesson is to retrofit. §13 lists the
+individual bugs behind those rules — every entry in it was real.
+
+*Sections 5–13, 15 and 16 were revised after a full build of this blueprint (35
+releases, ~1,100 tests). Where the original guidance turned out to be wrong or
+incomplete, it has been corrected rather than annotated.*
+
 ---
 
 ## 1. What the platform layer gives you for free
@@ -35,7 +44,7 @@ Every app built from this blueprint ships with these on day one. This is the
 | **Two-way Google Drive sync** | `drive.file` scope only — the app sees only its own folder |
 | **Conflict resolution** | Last-write-wins with **tombstone-always-wins**; pure + unit-tested |
 | **Backup / Restore** | Separate timestamped copies; restore as *merge* or *replace* |
-| **Activity log** | Capped diary of sync/backup/restore + **why auto-sync skipped** |
+| **Sync log** | Capped diary of sync/backup/restore + **why auto-sync skipped** |
 | **Recently deleted (trash)** | Browse tombstones, restore, or permanently wipe content |
 | **Export** | JSON (full fidelity) + CSV (spreadsheet) |
 | **Print / reports** | Single record + full grouped overview, real print stylesheet |
@@ -200,6 +209,9 @@ project/
   db.js                 # IndexedDB wrapper + pure data helpers (stats, search text)
   sync.js               # Google Drive REST + OAuth + sync/backup/restore
   merge.js              # PURE merge logic — no DOM, no network, no storage
+  crypto.js             # PURE-ish WebCrypto: key derivation, envelope, blob sealing
+  calendar.js           # PURE iCalendar (.ics) builder
+  report.js             # PURE export + print builders (CSV, JSON, print HTML)
   ui.js                 # toast, dialogs, focus trap, formatters, shared widgets
   i18n.js               # NL/EN dictionaries + t() + applyTranslations()
   icons.js              # inline SVG path data, one place
@@ -219,13 +231,20 @@ project/
   view-settings.js
   view-report.js        # insights / statistics
   view-trash.js         # recently deleted
-  view-activity.js      # sync activity log
+  view-synclog.js       # sync log (diagnostics) — NOT "activity", see §8.4
+  view-timeline.js      # the event log / history
 ```
 
 **Rules**
 - A view module never imports another view module. Cross-view actions are passed in
   as callbacks from `app.js` (`initDetailView({ onChanged, onDelete, onNavigate })`).
-- `merge.js` and `markdown.js` import **nothing**. That is what makes them testable.
+- `merge.js`, `markdown.js`, `calendar.js` and `crypto.js` import **nothing** from the
+  app. That is what makes them testable.
+- `report.js` takes its translator as a **parameter** rather than importing `i18n.js`,
+  so the print and export builders can be tested with a stub dictionary.
+- A second list-like view gets its **own module** rather than making the first
+  multi-instance: the expensive part (the pure query engine) is already shared, and the
+  singleton state, fixed element ids and gesture handlers are not worth untangling.
 - Every new module must be added to the service-worker precache list **and** the
   `CACHE_VERSION` bumped, or offline breaks silently.
 
@@ -241,6 +260,7 @@ envelope, so new domain fields ride along with zero changes to the platform code
 {
   id:         "uuid",          // crypto.randomUUID(); never reused
   type:       "note",          // your app's discriminator (drives icons/filters)
+  kind:       "record",        // "record" | "event" — see below
 
   // --- envelope: required by the platform layer ---
   createdAt:  "ISO-8601",
@@ -255,16 +275,51 @@ envelope, so new domain fields ride along with zero changes to the platform code
   tags:       [],
   pinned:     false,
   reminderAt: null,            // "YYYY-MM-DD" or null
+  recurrence: null,            // { every: "year", interval: 1 } or null
   linkedIds:  [],              // ids of related records
+  fields:     [],              // [{ id, key, value }] — see "structured fields"
 
-  // --- media (only if your app has attachments) ---
-  mediaId:    null,            // key into the separate media store
-  filename:   null,
-  mimeType:   null,
+  // --- the event axis (only if your app records history) ---
+  occurredAt: null,            // "YYYY-MM-DD" — when it HAPPENED
+  eventType:  "",              // one of a small fixed set
+  amount:     null,            // optional number
+
+  // --- media: N per record, not one ---
+  links:       [],             // [{ id, label, url }]
+  attachments: [],             // [{ mediaId, filename, mimeType, size }]
 
   // --- your domain fields go here, freely ---
 }
 ```
+
+**`kind` — a second axis instead of more types**
+
+A records app eventually needs to store *what happened* as well as *what exists*: the
+boiler serviced, the premium paid, the power out. The obvious move is another `type`,
+and it is the wrong one — an event about the router should keep the router's colour,
+icon and filter chip.
+
+So `kind` is a second, orthogonal axis. An event lives in the same store with the same
+envelope and inherits sync, merge, tombstones, trash, search, tags, links and
+attachments **with no second implementation of any of them**. Rows written before the
+axis existed have no `kind` at all and normalise to `"record"`, which is exactly right.
+
+The cost is one filter argument in the query engine and one exclusion in the stats.
+The alternative — a second store — means a second sync file, a second merge path, a
+second trash and a second export.
+
+**Structured fields — the answer to "one form per type"**
+
+An account record wants a provider and a customer number; a device wants a serial and
+an installer. Do **not** fork the form per type: the type is metadata, not a schema,
+and seven schemas means seven of everything downstream (export, print, merge, search,
+diff).
+
+Instead, any record can carry `fields: [{ id, key, value }]`, and the **type only
+decides what the app suggests** in a `<datalist>`. Seven types get seven sensible
+forms out of one mechanism, a key the user invents works identically, and the platform
+layer stays field-agnostic. Values render monospace with a copy button — a reference
+number exists to be pasted somewhere else.
 
 **Why each envelope field exists**
 
@@ -278,13 +333,27 @@ envelope, so new domain fields ride along with zero changes to the platform code
 - `purgedAt` — "delete forever": content wiped, bare tombstone kept so sync still
   enforces the deletion and the record can never resurrect.
 
-**Three IndexedDB stores**
+**Four IndexedDB stores**
 
 | Store | Key | Contents |
 |---|---|---|
-| `items` | `id` | the records above |
+| `items` | `id` | the records above — records AND events |
 | `media` | `id` | `{ id, blob, thumbnailBlob }` — binary kept out of the record |
-| `meta` | `key` | settings, tokens, `lastSyncAt`, activity log |
+| `meta` | `key` | settings, tokens, `lastSyncAt`, sync log, saved views, the encryption key |
+| `versions` | `key` | per-record revision history — **local only, never synced** |
+
+**Why revision history must be local**
+
+Last-write-wins discards the losing record *whole*. History kept inside the record
+would therefore vanish together with the edit you wanted it for — precisely the case
+it exists to cover. A separate local store keeps each device's own view of what it
+saw, and lets the merge snapshot what it is about to overwrite.
+
+Its keys are `` `<recordId>#<zero-padded seq>` ``, which makes string order
+chronological within a record and every record's history a contiguous run — so a
+cursor over a key range reads exactly one record's revisions **with no secondary
+index**. Sequence numbers come from the last key rather than from a count, or evicting
+an old revision would let a new one reuse a number and sort itself into the middle.
 
 ---
 
@@ -293,25 +362,57 @@ envelope, so new domain fields ride along with zero changes to the platform code
 Hand-rolled promise wrapper over IndexedDB. Roughly this surface:
 
 ```js
-openDB()                          requestPersistentStorage()
-makeId()                          getStorageEstimate()
+// lifecycle & identity
+openDB()  closeDB()  useDatabase(name)      requestPersistentStorage()
+makeId()  makeRecord(fields)  hydrateRecord(raw)   getStorageEstimate()
 
-putItem(item)                     getItem(id)
+// items
+putItem(item, { touch })          getItem(id)
 putItems(items)                   getAllItems()
-queryItems({ search, tags, type, sortBy, sortDir,
-             dateFrom, dateTo, offset, limit })   // -> {results,total,hasMore}
-getDeletedItems()                 // tombstones, excludes restored/purged
+queryItems({ search, type, kind, eventType, tags, sortBy, sortDir,
+             dateFrom, dateTo, dateField, offset, limit,
+             pinnedFirst, onlyDeleted })         // -> {results,total,hasMore}
+getDeletedItems()   softDeleteItem(id)   clearItems()
 
-putMedia(rec)  getMedia(id)  deleteMedia(id)  cloneMedia(sourceId)
+// revision history (local only)
+getVersions(recordId)   clearVersions(recordId)   VERSION_KEEP
+versionKey(id, seq)     versionKeyRange(id)
+
+// media
+putMedia(rec)  getMedia(id)  deleteMedia(id)  cloneMedia(id)  getAllMediaIds()
 makeThumbnail(file)  makeFullImage(file)
 
-getMeta(key, default)  setMeta(key, value)
-logActivity(kind, outcome, detail)   getActivityLog()   clearActivityLog()
+// meta + sync log
+getMeta(key, default)  setMeta(key, value)  deleteMeta(key)
+logActivity(kind, outcome, detail)  getActivityLog()  clearActivityLog()
 
-// pure helpers — unit-tested
-normalizeSearchText(s)   stripTrackingParams(url)   normalizeUrl(url)
-getStats()   bucketItemsByWeek(items, n)   sortTagsByRecency(tags)
-computeBacklinks(items, id)   computeLinkedIdSet(items)
+// ── pure helpers, all unit-tested ────────────────────────────────────────
+// normalisation (every one falls back rather than throwing)
+normalizeType  normalizeKind  normalizeEventType  normalizeRecurrence
+normalizeAmount  normalizeFields  normalizeViews  normalizeSearchText
+normalizeUrl  stripTrackingParams  buildHaystack
+
+// querying & ordering
+queryItemSet(items, opts)   makeComparator(sortBy, sortDir, pinnedFirst)
+
+// recurrence arithmetic
+addSteps(anchor, rule, n)   nextOccurrence(dateIso, rule, fromIso)
+completeReminder(record, todayIso)
+
+// analytics
+computeStats(items, today)        bucketItemsByWeek(items, weeks, opts)
+computeSpend(items, { from, to }) computeIncidents(items)
+computeUpcoming(items, today, days)  countEventsBySubject(items)
+sortTagsByRecency(items)          reminderTypesInUse(items)
+computeBacklinks(items, id)       computeLinkedIdSet(items)
+dueNotification(items, today, notifiedThrough)
+
+// revisions & saved views
+diffRecords(a, b)   applyVersion(current, version)   DIFFABLE_FIELDS
+isEmptyFilterSet(filters)   SAVED_VIEW_MAX
+
+// the capped sync-log ring buffer
+appendActivity(log, entry, cap)
 ```
 
 **Conventions**
@@ -322,6 +423,17 @@ computeBacklinks(items, id)   computeLinkedIdSet(items)
   scroll restoration).
 - Migrations: bump the IndexedDB version and add stores in `onupgradeneeded`. Never
   rewrite existing records on upgrade; treat missing fields as defaults at read time.
+- **Read-time migration is not optional, it is the safety mechanism.** `hydrateRecord`
+  fills every missing field on the way out, and a legacy-value map (`note → various`,
+  `reading → other`) resolves retired values to current ones. Without it, an unknown
+  value falls through to the default, and because sync writes back through the same
+  hydration path **that loss is then persisted and cannot be undone**. Crucially,
+  hydration must never touch `updatedAt`, or every device would think it held the
+  newest copy of everything the moment it upgraded.
+- **Normalisers fall back; they never throw and never half-build.** A malformed
+  recurrence becomes `null` ("does not repeat"), not `{ every: undefined }` — a rule
+  that cannot be computed must read as *no rule*, never as a schedule nobody can
+  predict.
 
 ---
 
@@ -373,6 +485,57 @@ Rules that are easy to get wrong and must stay in the pure module:
    by the now-stale merged set.
 5. Write `items.json` back to Drive, set `lastSyncAt`, log the outcome.
 
+### Encryption of the remote payload (optional, but cheap)
+
+Local IndexedDB stays **plaintext**, deliberately: the disk is already covered by
+full-disk encryption and a device passcode, and encrypting locally costs a prompt every
+session, an in-memory search index and any read-only mode — for a threat the operating
+system already handles.
+
+What is worth encrypting is the **remote copy**: account numbers and contracts sitting
+on someone else's disk, indefinitely, readable by anyone who reaches that account.
+
+```js
+// the whole wire format
+{ v: 2, enc: "AES-GCM",
+  kdf: { name: "PBKDF2", hash: "SHA-256", iterations: 600000, salt: "<b64>" },
+  iv: "<b64>", ct: "<b64>" }
+```
+
+- **AES-GCM-256**, key derived by **PBKDF2-SHA-256** at 600,000 rounds. All WebCrypto,
+  no dependency.
+- **The salt travels with the payload.** A second device has never seen it and has no
+  other way to derive the same key from the same passphrase; a salt is not a secret.
+  Deriving from a fresh one would tell the user their own passphrase was wrong.
+- **The passphrase is never stored.** The derived key is, as a **non-extractable
+  `CryptoKey`** in IndexedDB — it survives structured clone, so no prompt every
+  session, and `exportKey` refuses it (`InvalidAccessError`) so nothing can read it
+  back out, including the app.
+- **GCM authenticates**, so a wrong key *throws* rather than returning plausible
+  nonsense. That is what makes "wrong passphrase" a reportable error instead of silent
+  corruption. Unlocking must **prove** the passphrase against the existing envelope
+  before storing a key, or the app claims to be unlocked and fails every sync with no
+  explanation.
+- **Attachments carry a magic header** (`MAGIC | iv | ciphertext`) so files uploaded
+  before encryption was switched on still open — the reader must be able to tell the
+  two apart without being told which is which. Filenames stay in the clear because
+  media reconciliation keys off the `<mediaId>__` prefix.
+- **The irreversible part**: lose the passphrase and every backup is lost. Confirm it
+  in plain words and offer a printable recovery sheet — which cannot contain the
+  passphrase, because the app never keeps it.
+
+### The payload guard — ship it BEFORE you need it
+
+`parseItems` must **refuse what it cannot read** rather than returning `[]`.
+
+An older build parsing an encrypted envelope as "no records" merges that as an empty
+remote, and the write-back then uploads its plaintext straight over the encrypted file
+— every secret republished in the clear, reported as a *successful sync*. Unrecognised
+payloads must abort and name the version so the log says "upgrade this device".
+
+This guard has to be live on **every** device before the encrypting build ships, which
+means shipping it one release early. A zero-byte file stays the one benign empty case.
+
 ### Error taxonomy
 
 | Code | Meaning | Handling |
@@ -382,6 +545,11 @@ Rules that are easy to get wrong and must stay in the pure module:
 | 404 | Remote file/folder gone | Recreate it |
 | 409 / conflict | Concurrent write | Re-read, re-merge, retry once |
 | offline | `navigator.onLine === false` | Skip, log the reason, no error toast |
+| `unreadable` | Corrupt or non-JSON payload | **Abort.** Backups are the recovery path |
+| `unsupported-format` | A payload shape this build does not speak | **Abort**, name the version |
+| `encrypted` | Recognised envelope, no key held | Stash the salt, ask for the passphrase |
+| `needs-passphrase` | Same, surfaced to the UI | Log as a *skip*, not a failure |
+| `wrong-passphrase` | Held key does not open the payload | Drop the key, ask again |
 
 ---
 
@@ -404,8 +572,12 @@ Lists backups newest-first. The user chooses:
 
 Both modes re-download any missing media referenced by the restored records.
 
-### 8.4 Activity log
+### 8.4 Sync log
 A capped ring buffer (≈60 entries) in the meta store. **Local only — never synced.**
+
+Call it the *sync log*, not "activity". If the app ever gains a timeline of what
+happened in the real world (§8.17), two screens called "activity" will send people to
+the wrong one every time.
 
 ```js
 { at: ISO, kind: "sync"|"backup"|"restore"|"autosync",
@@ -474,8 +646,99 @@ platform quirks the user will hit.
 
 ### 8.16 App badge (optional)
 `navigator.setAppBadge(count)` for due reminders, feature-detected, updated on boot and
-after every data change. The strongest nudge a serverless PWA can give — no push server
-is possible without one.
+after every data change. Route it through the same funnel as the list refresh, or a
+change made in one view leaves the badge stale.
+
+### 8.17 Event log / timeline (if the app records history)
+Events are records with `kind: "event"` (§5), so this view is a thin renderer over the
+same pure query engine. Rows group under sticky month headings, the primary axis is
+`occurredAt`, and there is a running total for anything carrying an amount.
+
+**The feature's real risk is that nobody fills it.** Manual journals die within weeks.
+The mitigation is that most entries must be *generated*: completing a recurring
+reminder writes its maintenance event automatically, and logging from a record
+pre-fills the subject and type. If the only events that ever exist are the automatic
+ones, the feature still pays for itself.
+
+An event points at its subject through `linkedIds`; **the subject is never modified**,
+so logging fifty events leaves its `updatedAt` alone and none of them can lose a race
+with an edit from another device.
+
+### 8.18 Recurrence
+`recurrence: { every: "day"|"week"|"month"|"quarter"|"year", interval: n }`.
+
+Two controls, not a rule builder. The arithmetic is the entire feature and it is a bug
+farm — see §13.
+
+"Done" advances the date **and writes the event**. That is the point: it is the one
+moment the user is already telling the app that work happened, so it is the only place
+a history can be created without asking for anything extra.
+
+### 8.19 Catch-up notification
+There is no server, so there is no push. The honest version is: the app says what is
+due **when it is opened**. State that plainly in the UI and recommend a calendar for
+anything critical — dressing it up as a reminder system it is not is worse than the
+limitation.
+
+- Permission is requested from a **button**, never on load. A prompt on first paint is
+  the fastest route to a permanent denial, and there is no second chance.
+- Fired via `registration.showNotification`, not `new Notification` — only that form
+  survives in an installed PWA and reaches a `notificationclick` handler.
+- **Once per day at most**, tracked by a `notifiedThrough` date. Repeating it every
+  launch is how an app gets muted for good.
+- A click messages an already-open tab rather than navigating it, so an unsaved record
+  survives.
+
+### 8.20 Calendar export (`.ics`)
+The only mechanism that reaches the user while the app is **closed**. Export `RRULE`
+rather than a list of dates, so the calendar owns the recurrence from then on and keeps
+firing without the app ever running again.
+
+Deliberately a **download, not a feed**: a subscribable feed would have to be plaintext,
+which contradicts §7's encryption — reminder titles are the most descriptive text in the
+whole record set — and a `drive.file`-scoped app cannot publish a public URL anyway.
+
+Details that matter: all-day events (`DTEND` is exclusive), a `VALARM` or the entry is
+silent, stable `UID`s so re-importing updates rather than duplicates, CRLF line endings
+and 75-octet line folding (RFC 5545 requires both and some clients enforce them).
+
+### 8.21 Revision history
+The last N saves of each record, restorable, in a **local-only** store (§5).
+
+Snapshot inside the **same transaction** as the write, or a crash between them loses
+the old copy and keeps the new one — the single outcome the feature exists to prevent.
+Sync writes snapshot too, but **only when `updatedAt` actually moved**: a sync writes
+back the whole merged set every time, and snapshotting unchanged rows would fill the
+history with copies of itself.
+
+Restoring is an ordinary edit under the **same id** — not the trash's
+restore-under-a-new-id. The record never stopped existing, and a new identity would
+orphan every event and link pointing at it. Purging must wipe the revisions, or "delete
+forever" leaves every field recoverable one panel away.
+
+### 8.22 Bulk selection
+A **mode**, not an always-on checkbox column — a column shifts every row sideways
+permanently for something used occasionally. In the mode a tap *ticks* rather than
+opens; ticked rows get an outline, so nothing moves when the mode turns on.
+
+The selection must be cleared on leaving the view. Acting later on records someone
+forgot were ticked is the one way bulk actions go badly wrong. Bulk delete asks with a
+dialog rather than the usual undo-toast: forty records is past the point where "did I
+mean that?" can be answered from something already fading.
+
+### 8.23 Saved views
+A named filter set as a chip above the list — filtering becomes navigation. Cap the
+list, refuse to save an **empty** filter set (a view that selects everything is a button
+that does nothing), and repaint the chips whenever the filters change, or a chip stays
+marked active over a filter set that no longer matches it.
+
+Not synced: a per-device convenience whose merge story would cost more than recreating
+one in five seconds.
+
+### 8.24 Paste to create
+Paste a file, image, URL or text onto a list and it becomes a pre-filled draft. This is
+the **iOS answer to Web Share Target**, which Safari does not implement. Never
+intercept a paste aimed at an input.
 
 ---
 
@@ -530,6 +793,8 @@ pull-to-refresh to sync.
 
 ## 10. Design system
 
+### Rules
+
 - **Tokens first.** No literal colour in a component rule — only `var(--…)`.
 - **Layout does spacing.** Flex/grid + `gap`, not per-element margins.
 - **Wide content scrolls itself.** Tables/code get `overflow-x:auto` on their own
@@ -541,7 +806,102 @@ pull-to-refresh to sync.
 - **Glass chrome** (translucent + `backdrop-filter`) for top/bottom bars, with a solid
   fallback.
 - **Accessibility**: visible focus rings, `aria-label` on icon-only buttons, focus traps
-  in dialogs, ≥44 px touch targets, real contrast in every theme.
+  in dialogs, ≥44 px touch targets, real contrast in every theme, and an `aria-live`
+  region on anything that changes silently (a filtered result count tells a screen
+  reader nothing otherwise).
+
+### Colour
+
+Four themes — two dark (`dark`, `midnight`), two light (`light`, `paper`) — each a flat
+block of the same ~20 custom properties. No computed colour, no colour maths at
+runtime: a theme is a list of values, which is what makes adding one a five-minute job
+and a contrast bug a one-line fix.
+
+Two conventions worth stealing:
+
+- **`color-scheme` is set per theme**, so form controls, scrollbars and the caret follow
+  without further work.
+- **Semantic tokens, not palette names.** `--danger`, `--success`, `--warning`,
+  `--text-secondary`, `--text-tertiary`, `--surface`, `--surface-raised`, `--border`.
+  A component asks for meaning, never for "blue".
+
+**Per-category accent colours** get their own tokens (`--type-devices`,
+`--event-incident`, …) with **a separate set per theme family**: the same hue that reads
+well on near-black is illegible on paper. Categorical colour must be defined twice, not
+computed once.
+
+### Typography
+
+- **One self-hosted display face** for headings and the brand, `woff2`, subset, with
+  `unicode-range` so it is never fetched for text it cannot render. Never a font CDN:
+  it breaks offline and adds a third party to a local-first app.
+- **System stack for body text.** It is already on the device, it is what the OS renders
+  best at small sizes, and it costs nothing.
+- **`font-display: swap`** — after the first visit the face is precached, so the swap
+  is invisible; blocking would give a blank heading.
+- **Declare a weight *range* on a single static face** (`font-weight: 400 700`) if the
+  design asks for weights it does not contain. That tells the browser this face covers
+  the range, so it renders the real outlines instead of faking a bold by smearing them —
+  synthetic bold on a display serif looks awful.
+- **Monospace for reference numbers.** Serials, policy and customer numbers are read a
+  character at a time and compared against something on paper: a face where `0` and `O`
+  differ is not decoration. Pair it with `font-variant-numeric: tabular-nums` anywhere
+  figures form a column, so amounts line up on the decimal.
+
+### Information density — getting the most on screen
+
+This is the design problem a data app actually has, and it has three separate answers.
+
+**1. A density preference, and make it mean something.** "Compact" must be a real
+change, not 8px of padding: it drops secondary lines entirely and collapses the gaps
+between cards into one divided block. In this app it took list rows from 71px to 41px.
+Anything less and users conclude the setting does nothing.
+
+**2. Progressive disclosure, with the summary in the header.** A record page that grew
+one panel per feature reached **2.8 phone screens with eight sections open**. Collapsing
+the secondary panels halved it — but only works if a closed header still answers *"is
+there anything in here?"*:
+
+> `Bestanden (2)` · `Geschiedenis (3 · €263,50)` · `Herinnering  15 sep 2026 · jaarlijks`
+
+A panel that must be opened to discover it is empty is worse than no panel. Remember
+open/closed **per user, not per record** — someone who always wants attachments visible
+wants that everywhere.
+
+Keep *actions* outside the collapsed body. The badge and the "Done" button live in a
+strip under the header: burying the control that logs the work is exactly the friction
+the collapse was meant to remove.
+
+**3. Delete the line that repeats itself.** Every list row showed `updatedAt` — on
+records touched in one sitting, the same date eight times over, occupying the most
+valuable line on the row. Replaced by a priority: the reminder date if there is one,
+else how much has happened to it, else the date. Same pixels, real information.
+
+The same instinct applies to a compact timeline: drop the *year* from a row that already
+sits under a month heading, and drop the category *word* from a row whose coloured icon
+already says it. Both are duplication, and removing them buys the title real width.
+
+### Responsive layout — what gives way, in what order
+
+Decide the priority explicitly and let the layout implement it, rather than shrinking
+everything equally:
+
+- **A name that truncates is a row you cannot identify.** "CV-ketel Rem…" is worthless;
+  a bar 30px shorter still reads fine. So the *bar* shrinks first, and below a
+  breakpoint it **moves to its own line** rather than the label losing.
+- **Chip rows collapse to one line** with a toggle that appears only when they genuinely
+  overflow — measured from a real chip, not assumed. The row auto-opens if the active
+  filter could be on a hidden line, and folds back when that reason disappears, unless
+  the user opened it by hand: an automatic action must not outrank an explicit one.
+- **`auto-fit` with a sensible `minmax`** gives two columns on a phone and three on a
+  desktop from one rule. Reach for it before writing a second breakpoint.
+
+### Keyboard
+
+A thumb-shaped app is still used on a desktop. Four shortcuts earn their place — search,
+new, jump-to-record, save — and a fuller scheme is a vocabulary nobody asked to learn.
+**Modifier shortcuts must work inside text fields** (⌘S while typing is the one people
+reach for); bare letters must not, or the letter can never be typed.
 
 ---
 
@@ -551,6 +911,7 @@ pull-to-refresh to sync.
 // i18n.js
 const dict = { nl: { key: "Nederlands {var}" }, en: { key: "English {var}" } };
 t(key, vars)             // interpolates {var}
+tCount(key, n)           // picks `key.one` for 1, `key` otherwise
 setLang(lang)            // persists to meta
 applyTranslations()      // walks the DOM
 ```
@@ -560,6 +921,18 @@ applyTranslations()      // walks the DOM
 - **Every user-visible string goes in the dictionary.** No exceptions, including toast
   text, error messages, empty states and log labels.
 - Language switch must re-render the current view live, not require a reload.
+- **Plurals need a `.one` sibling key from the start.** "1 items" is machine output.
+  Both NL and EN have exactly two forms, so a sibling key plus a count helper is enough
+  — no `Intl.PluralRules` needed — but retrofitting it across a grown dictionary is
+  tedious, so add the helper on day one and use it for every counted string.
+- A module that takes its translator as a **parameter** (for testability) cannot call
+  the helper. Have it ask for the `.one` key and fall back to the plural when the
+  dictionary has none, rather than printing a raw key onto a page someone is holding.
+- **Test that every key exists in both languages** — and that every *suggestion*,
+  category and enum label does too. A missing key renders as its own name, which is the
+  kind of thing that ships.
+- Keep log/diagnostic detail strings **language-neutral** (`+3 ~1 -2 ↑4`), so a
+  diagnostic buffer never sprouts one language's text.
 
 ---
 
@@ -580,6 +953,17 @@ assertEqual(actual, expected, "label")   // renders PASS/FAIL rows + a summary
 - stats, bucketing, tag sorting, backlink computation
 - the Markdown renderer, including **XSS**: escaping raw HTML, rejecting
   `javascript:` URLs, and preventing attribute break-out
+- **every normaliser**, including the malformed and retired-value paths
+- **date arithmetic exhaustively** — month-end clamping in both directions, leap years,
+  a decade-stale anchor, and completion both early and late
+- **the payload parser's refusals**, one assertion per error code
+- **the crypto round-trip**: that the serialised payload contains none of the plaintext,
+  that a wrong key throws, that two encryptions of identical data differ, and that a
+  second device can derive the same key from the shipped salt
+- **plural forms**, so "1 items" never ships
+
+Everything storage-backed is tested against a **separate database name**
+(`useDatabase()`), so the suite can never touch real data.
 
 Target: the pure layer is fully covered. DOM behaviour is verified by driving the real
 app in a browser, not by mocking.
@@ -616,9 +1000,61 @@ app in a browser, not by mocking.
 12. **A line-based Markdown renderer** turns a single newline into `<br>`; keep each
     paragraph/bullet on **one source line** or the formatting shatters.
 
+**Sync (continued)**
+14. **Never let an unreadable payload parse as empty.** Returning `[]` makes the next
+    write-back overwrite the remote with local state. Abort instead. (§7)
+15. **Snapshot inside the same transaction as the write.** Two transactions can lose
+    the old copy and keep the new one.
+
+**Dates**
+16. **Month arithmetic must count whole steps from the ANCHOR, never iteratively.**
+    Clamping is lossy: 31 Jan + 1 month = 28 Feb, and stepping again *from that result*
+    gives 28 Mar. A monthly reminder silently migrates to the 28th forever. Counting
+    from the anchor gives 31 Jan → 28 Feb → **31 Mar** → 30 Apr.
+17. **"Done" must advance from whichever is later, the scheduled date or today.**
+    Measuring only from today breaks doing a job early — a task due on the 31st,
+    completed on the 6th, resolves to "next occurrence after the 6th", which is still
+    the 31st, so the button appears to do nothing.
+18. **Never `new Date("2026-08")`** — some engines read it as local time and it slips
+    into the previous month east of Greenwich. Build an explicit UTC midnight.
+
+**CSS**
+19. **`:read-only` matches every `<select>`.** A select is never `:read-write`, so a
+    bare `.input:read-only` rule silently strips the border and background off every
+    dropdown in the app. Scope such rules to `input` and `textarea`.
+20. **Count your grid children.** Four children in a three-column grid pushes the
+    fourth onto a row of its own — a whole line of height for one icon, on every row.
+21. **Never measure a hidden view.** A hidden section has no layout: every box reports
+    0. Writing that back (e.g. as a CSS variable) collapses the element to nothing.
+    Bail out when a measurement returns 0 and re-measure once the view is on screen.
+22. **A nested row inside a column-direction flex parent inherits `flex: 1` as
+    "grow vertically"**, leaving controls floating in a tall empty box.
+
+**i18n**
+23. **Plurals need a singular sibling key from day one.** "1 items" is what a machine
+    writes, not a person. A `.one` key plus a count helper costs nothing up front and
+    is tedious to retrofit across a dictionary.
+
 **Release**
 13. **Add every new module to the SW precache list and bump `CACHE_VERSION`**, or
     offline breaks for existing installs only — invisible in dev.
+24. **Precache with `cache: "reload"`.** `cache.addAll()` fetches *through the HTTP
+    cache*. With any `max-age` on the host (GitHub Pages sends 600s), files fetched in
+    the last few minutes are handed over stale and frozen into the brand-new version
+    cache — where they stay until the next release, because a version cache is written
+    once. The result is a build that is genuinely half old, and **which** halves depends
+    on what the browser happened to be holding. Symptom: a fresh `index.html` with a
+    stale `i18n.js`, so new UI renders raw translation keys and icons vanish.
+
+    ```js
+    const requests = PRECACHE.map((url) => new Request(url, { cache: "reload" }));
+    await cache.addAll(requests);   // still atomic
+    ```
+
+    Apply the same to any background re-fetch that writes into the live cache.
+25. **Add `.nojekyll`** on GitHub Pages. Nothing in a hand-written static app needs
+    Jekyll, and skipping it removed ~28 minutes from the deploy in this project
+    (29 min → under 1).
 
 ---
 
@@ -661,12 +1097,20 @@ Default: <nl>   Also: <en>
 ## 15. Release discipline
 
 1. Bump `version.js` `build` on **every** change (and `date` to `YY-MM`).
-2. If any precached file changed, bump `CACHE_VERSION` in `sw.js`.
-3. Run `tests.html` — all green.
+2. If any precached file changed, bump `CACHE_VERSION` in `sw.js`. A **new module**
+   must also be added to the precache list itself.
+3. Run `tests.html` — all green. Clear the service worker and caches first, or you may
+   be testing yesterday's modules.
 4. Exercise the changed flow in a browser; console must be clean.
 5. Stage **by filename** (never `git add -A` — editor lock files and OS junk leak in).
 6. Commit with a body that explains *why*, not just what.
 7. Push only on the explicit word from the owner.
+8. **Verify the deploy on the real host**, not just locally: confirm the build number,
+   the cache version, and that every precache entry returns 200. A local dev server can
+   fail a burst of concurrent requests that the real host serves fine — and can equally
+   hide a genuinely missing file.
+9. When shipping something that changes the **wire format**, ship the guard that
+   recognises it at least one release earlier (§7).
 
 ---
 
@@ -682,6 +1126,10 @@ Default: <nl>   Also: <en>
 - [ ] Console clean, no unhandled rejections
 - [ ] Build number bumped, SW cache version bumped if needed
 - [ ] Help text updated if the user-visible behaviour changed
+- [ ] Counted strings have a singular form
+- [ ] New panels/rows measured on a 375px viewport, not just eyeballed on a desktop
+- [ ] Anything that changes silently has an `aria-live` region
+- [ ] Test data, seeded records and changed preferences cleaned up afterwards
 
 ---
 
@@ -915,5 +1363,167 @@ Nothing here is GitHub-specific. Netlify, Cloudflare Pages, Vercel and a plain
 nginx directory all work the same way: serve the folder over https, register
 that origin with Google. The only requirements are **https** and **no path
 rewriting**.
+
+---
+
+## 19. Generic lessons for any local-first PWA
+
+Everything above is a blueprint for one shape of app. This section is the part that
+transfers: rules that hold for **any** browser app with local storage and a sync
+mechanism, regardless of what it stores. They are ordered by how expensive they are to
+retrofit.
+
+### 19.1 The three failure modes that only appear in production
+
+Each of these is invisible on the machine that built the release, which is exactly why
+they cost the most.
+
+**A release that is half old.** Service-worker precaching through the HTTP cache
+(`cache.addAll` without `cache: "reload"`) freezes stale files into a brand-new version
+cache. The mix of old and new is decided by what the browser happened to be holding, so
+the symptom differs per device and never reproduces locally. Fix it once, at the
+precache, and apply it to every write into the live cache.
+
+**A sync that overwrites what it could not read.** Any parser that returns "empty" for
+an unrecognised payload will, one release later, silently republish local state over a
+remote it did not understand. Refusing is always correct; the recovery path for genuine
+corruption is a backup, never a blind overwrite.
+
+**A migration that wins the merge.** If read-time hydration touches `updatedAt`, every
+device believes it holds the newest copy of everything the moment it upgrades, and the
+first sync afterwards is a free-for-all. Hydration adds fields; it never restamps.
+
+### 19.2 Storage & schema
+
+- **The envelope is the platform; domain fields are cargo.** Sync, merge, trash,
+  export and print operate only on the envelope. Adding a field should require zero
+  platform changes — if it does not, the boundary is in the wrong place.
+- **Migrate at read time, never by rewriting the store.** Keep a map of retired values
+  to current ones. Deleting that map is safe only once no device can still hold an old
+  record — which, with sync, is later than it feels.
+- **Add axes, not enums.** When a second concept appears, ask whether it is a new value
+  of an existing discriminator or a genuinely orthogonal one. A second axis (`kind`)
+  keeps the first axis's colour, filters and icons intact; a new enum value throws them
+  away. A second *store* costs a second sync file, merge path, trash and export.
+- **Generic named fields beat per-type schemas.** One `[{key, value}]` array plus
+  per-type *suggestions* gives every type a tailored form without forking anything
+  downstream.
+- **Normalisers fall back, never throw and never half-build.** Malformed input must
+  resolve to the safest complete value ("does not repeat"), not a partial object.
+- **Cap and trim on write.** Length limits belong in the normaliser, so nothing
+  downstream has to defend against a 40 KB "title".
+
+### 19.3 Sync & conflict
+
+- **Tombstones are the delete mechanism.** A hard delete cannot propagate — the other
+  device re-adds it. Every delete is a write.
+- **Tombstone always wins** in the merge, whatever the timestamps say, or a
+  resurrection race is unwinnable.
+- **Restore under a NEW id.** The old tombstone survives and would re-kill the record.
+- **Re-read and re-merge immediately before write-back.** Slow media transfers open a
+  window in which a local edit gets clobbered by an already-stale merged set.
+- **Last-write-wins silently discards the loser.** If that matters, capture what a sync
+  is about to overwrite — and keep that capture **local**, because a synced history
+  disappears along with the record that lost.
+- **Never gate remote cleanup on local state existing.** A blob purged locally seconds
+  after deletion leaves its remote copy orphaned forever if the check runs the wrong way
+  round.
+- **Reconcile binaries by a filename convention** (`<id>__<name>`), so the mapping needs
+  no index and survives both sides being rebuilt.
+- **Log every skip, not just every failure.** Tokens expiring hourly with no silent
+  refresh means most launches legitimately do nothing; without a line saying so, working
+  software looks broken.
+
+### 19.4 Encryption, if you add it
+
+- Encrypt the **remote** payload; leave local storage to the OS. The cost/benefit is
+  lopsided in both directions.
+- Ship the **unknown-payload guard one release early**. It is the only thing standing
+  between a mixed-version fleet and a plaintext republish.
+- **Ship the salt with the ciphertext**; derive the key on the other device from it.
+- **Store a non-extractable `CryptoKey`**, never the passphrase.
+- **Prove the passphrase before storing the key**, using the existing payload as the
+  probe. Otherwise the app claims to be unlocked and fails forever with no explanation.
+- **Self-describe encrypted binaries with a magic header**, so files written before the
+  switch still open.
+- Say plainly, before switching it on, that losing the passphrase loses everything.
+
+### 19.5 Service worker & release discipline
+
+- **No `skipWaiting()` in `install`.** Claiming clients mid-session hands new assets to
+  an already-loaded old page. Let the worker wait, notice it from the app, and offer a
+  reload — the swap then happens all at once on a fresh page.
+- **Never return the app shell for every navigation.** An unconditional fallback hijacks
+  every other document in the project (`tests.html` starts serving the app), which is
+  invisible until you wonder why the test page stopped updating.
+- **One precache list, one `CACHE_VERSION`, bumped together.** Forgetting breaks offline
+  for existing installs only.
+- **Precache with `cache: "reload"`.** See §19.1.
+- Keep `addAll` (atomic) rather than looping `put` — a half-populated cache is worse
+  than none.
+
+### 19.6 Testing without a framework
+
+A single `tests.html` that imports the real modules and runs assertions in the browser
+is enough, and it survives having no build step.
+
+- **Split pure from impure deliberately.** `queryItems()` = `queryItemSet(await
+  getAllItems(), opts)`. The part that is easy to get wrong becomes the part that is
+  easy to test.
+- **Test the reasoning, not the implementation.** Assertion messages should say *why*
+  ("the oldest goes first — what slipped matters more than what just came up"), so a
+  failure years later explains itself.
+- **Every bug found in the browser becomes an assertion.** That is what stops the suite
+  from only covering what was easy.
+- **Watch for tests that cannot fail.** A tautology (`assertEqual(x, cond ? x : x)`)
+  passes forever and tests nothing.
+- **DOM behaviour is verified by driving the real app**, not by mocking a DOM.
+
+### 19.7 Verifying your own work
+
+- **Measure, do not eyeball.** "The form is too long" is an opinion; "2,314px, 2.8
+  screens, eight panels" is a target you can prove you hit.
+- **Beware the stale module.** With ES modules and a service worker, a browser will
+  happily run yesterday's code and report today's bug. Clear the worker *and* the caches
+  before believing any negative result — several "bugs" in this project were the
+  previous build.
+- **Check your probe before doubting the app.** In this project, a debug snippet calling
+  `caches.open(keys[0])` on an empty array created a cache literally named `"undefined"`
+  and then read it for several rounds of investigation.
+- **Verify on the real host, not the dev server.** A single-threaded local server can
+  fail a burst of 32 simultaneous conditional requests that a CDN serves without
+  blinking. The deployment target is the environment that counts.
+- **Clean up after seeding.** Test data, preference changes and stored keys all outlive
+  the check that created them.
+
+### 19.8 Interaction patterns worth copying
+
+- **Undo-toast for reversible destruction, confirm-dialog for irreversible.** And defer
+  the actual write to the toast's expiry, so an undone delete never happens at all.
+  Above a certain scale (bulk actions), switch to a dialog: "did I mean that?" cannot be
+  answered from something already fading.
+- **Two-speed persistence.** Save-gated for typed content, write-through for toggles and
+  attachments. Document the edge case rather than hiding it.
+- **Build widgets once, reset per open.** Rebuilding per open silently accumulates
+  listeners.
+- **Guard against overlapping async renders** with a sequence number: only the newest
+  may paint, and only the newest may raise or clear a loading state. Boot alone can
+  fire two renders.
+- **Delay skeletons ~180ms.** An IndexedDB read finishes in milliseconds; an immediate
+  skeleton flashes on every render and reads as jank.
+- **Modes must not outlive their view.** Clear a selection when the view changes.
+- **`.ics` is the only background reminder a serverless app has.** Export `RRULE` and
+  let the calendar own it.
+- **On iOS, prefer paste over Share Target.** Safari does not implement Web Share
+  Target and shows no sign of doing so.
+
+### 19.9 Documentation that stays useful
+
+Comment the **decision**, not the mechanism. `// loop over records` earns nothing;
+*"counting whole steps from the anchor, because clamping is lossy and stepping from the
+clamped result migrates the date permanently"* is the reason the next person does not
+"simplify" it back into a bug. Every non-obvious line in this project has a comment
+naming the failure it prevents — and this document exists so those reasons outlive the
+code they sit in.
 
 ---
