@@ -298,6 +298,7 @@ export const DIFFABLE_FIELDS = [
   "occurredAt",
   "eventType",
   "amount",
+  "fields",
   "links",
   "attachments",
   "linkedIds",
@@ -332,6 +333,54 @@ export function applyVersion(current, version) {
     if (field in version) restored[field] = version[field];
   }
   return restored;
+}
+
+/**
+ * ── Structured fields: the answer to "one form for seven types" ────────────
+ *
+ * An Account record wants a provider, a customer number and a policy number.
+ * A Devices record wants a serial, an installer and a warranty date. The
+ * obvious fix is a different form per type — and it is the wrong one: §5 is
+ * explicit that the type is METADATA, not a schema, and seven schemas means
+ * seven of everything downstream (export, print, merge, search).
+ *
+ * So one generic mechanism instead: any record can carry named fields, and the
+ * TYPE only decides what the app SUGGESTS. The platform layer stays
+ * field-agnostic, an Account gets the labels an account needs, and nothing
+ * forks. A key the user invents works exactly as well as a suggested one.
+ */
+export const FIELD_SUGGESTIONS = {
+  account: ["provider", "customerNumber", "username", "reference"],
+  utilities: ["provider", "contractNumber", "meterNumber", "renewal"],
+  devices: ["brand", "model", "serial", "installer", "warrantyUntil"],
+  configuration: ["address", "username", "location", "reference"],
+  document: ["reference", "issuer", "validUntil"],
+  calendar: ["contact", "phone", "reference"],
+  various: ["reference", "contact", "phone"],
+};
+
+/** Every suggestion key in use, deduplicated — for the tests and the datalist. */
+export const FIELD_SUGGESTION_KEYS = [
+  ...new Set(Object.values(FIELD_SUGGESTIONS).flat()),
+];
+
+/**
+ * Clean a stored field list. PURE.
+ *
+ * A field with no key is dropped: it could never be found, read or exported,
+ * and keeping it would leave an invisible row in the middle of the record.
+ * A field with a key and no value is KEPT — "policy number: (blank)" is a
+ * meaningful note to self that one is still needed.
+ */
+export function normalizeFields(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((f) => f && typeof f === "object" && String(f.key || "").trim())
+    .map((f) => ({
+      id: f.id || makeId(),
+      key: String(f.key).trim().slice(0, 60),
+      value: String(f.value ?? "").trim().slice(0, 500),
+    }));
 }
 
 /** Resolve a stored amount to a finite number or null. PURE. */
@@ -378,6 +427,7 @@ const SPARSE_DATE_FIELDS = new Set(["reminderAt", "occurredAt"]);
  *                                //  from values already used. Only meaningful
  *                                //  when reminderAt is set.
  *   recurrence:   null,          // { every: "year", interval: 1 } or null
+ *   fields:       [],            // [{ id, key, value }]         — N per record
  *   links:        [],            // [{ id, label, url }]        — N per record
  *   attachments:  [],            // [{ mediaId, filename, mimeType, size }]
  *
@@ -443,6 +493,7 @@ export function makeRecord(fields = {}) {
     body: fields.body || "",
     reminderType: fields.reminderType || "",
     recurrence: normalizeRecurrence(fields.recurrence),
+    fields: normalizeFields(fields.fields),
     links: Array.isArray(fields.links) ? [...fields.links] : [],
     attachments: Array.isArray(fields.attachments) ? [...fields.attachments] : [],
 
@@ -475,6 +526,7 @@ function coerce(raw) {
     type: normalizeType(raw.type),
     tags: Array.isArray(raw.tags) ? raw.tags : [],
     linkedIds: Array.isArray(raw.linkedIds) ? raw.linkedIds : [],
+    fields: normalizeFields(raw.fields),
     links: Array.isArray(raw.links) ? raw.links : [],
     attachments: Array.isArray(raw.attachments) ? raw.attachments : [],
     pinned: !!raw.pinned,
@@ -525,6 +577,7 @@ export function buildHaystack(item) {
     item.comment,
     item.reminderType,
     (item.tags || []).join(" "),
+    (item.fields || []).map((f) => `${f.key || ""} ${f.value || ""}`).join(" "),
     (item.links || []).map((l) => `${l.label || ""} ${l.url || ""}`).join(" "),
     (item.attachments || []).map((a) => a.filename || "").join(" "),
   ];
@@ -1067,6 +1120,24 @@ export function computeBacklinks(items, id) {
   return (items || []).filter(
     (item) => item && !item.deletedAt && (item.linkedIds || []).includes(id)
   );
+}
+
+/**
+ * How many live events point at each subject. PURE.
+ *
+ * One pass over the whole set rather than a scan per record: the list asks
+ * this for every visible row, and per-row scanning is quadratic on a set that
+ * is only going to grow.
+ */
+export function countEventsBySubject(items) {
+  const counts = new Map();
+  for (const item of items || []) {
+    if (!item || item.deletedAt || normalizeKind(item.kind) !== "event") continue;
+    for (const id of item.linkedIds || []) {
+      if (id) counts.set(id, (counts.get(id) || 0) + 1);
+    }
+  }
+  return counts;
 }
 
 /** Every id referenced by any live record. PURE. */

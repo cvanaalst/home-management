@@ -25,7 +25,7 @@ import {
   getAllItems,
   dueNotification,
 } from "./db.js";
-import { toast, todayIso } from "./ui.js";
+import { toast, todayIso, pickRecord } from "./ui.js";
 
 import {
   initListView,
@@ -377,6 +377,79 @@ async function pasteIntoDraft({ files, text }) {
   };
   await navigate("detail", { id: DRAFT_ID });
   toast(t(files.length ? "paste.file" : "paste.text"), "info", { duration: 2200 });
+}
+
+/**
+ * Keyboard shortcuts.
+ *
+ * The app is shaped entirely for a thumb, and it is used on a desktop too.
+ * These are the four that earn their place; a fuller scheme would be a
+ * vocabulary nobody asked to learn.
+ *
+ *   /        focus the search box
+ *   n        new record
+ *   ⌘/Ctrl+K jump to any record by name
+ *   ⌘/Ctrl+S save the open record
+ *
+ * A shortcut with a modifier works anywhere, including inside a text field —
+ * ⌘S while typing is the one people reach for most. A bare letter only works
+ * when nothing is being typed into, or `n` would be unable to type the letter.
+ */
+function bindShortcuts() {
+  document.addEventListener("keydown", async (event) => {
+    const target = event.target;
+    const typing =
+      target &&
+      (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+      if (state.currentView !== "detail") return;
+      event.preventDefault();
+      const save = $("btn-topbar-save");
+      if (save && !save.hidden) save.click();
+      return;
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      await jumpToRecord();
+      return;
+    }
+
+    if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+
+    if (event.key === "/") {
+      // Only where there IS a search box to focus.
+      const box = state.currentView === "timeline" ? $("timeline-search") : $("search-input");
+      if (!box || state.currentView === "settings") return;
+      event.preventDefault();
+      box.focus();
+      box.select();
+      return;
+    }
+
+    if (event.key === "n" && !state.locked) {
+      event.preventDefault();
+      navigate("add");
+    }
+  });
+}
+
+/** ⌘K — open any record by name, from anywhere. */
+async function jumpToRecord() {
+  if (state.currentView === "detail" && !(await confirmLeave())) return;
+  const items = await getAllItems();
+  const choices = items
+    .filter((i) => !i.deletedAt)
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    .map((i) => ({ id: i.id, title: i.title || t("detail.newRecord"), type: i.type }));
+  if (!choices.length) return;
+  const chosen = await pickRecord(choices);
+  if (chosen) {
+    skipLeaveGuard = true;
+    await navigate("detail", { id: chosen });
+    skipLeaveGuard = false;
+  }
 }
 
 function bindChrome() {
@@ -755,6 +828,7 @@ async function boot() {
   paintIcons();
   syncThemeColorMeta();
   bindChrome();
+  bindShortcuts();
   bindPasteToCreate();
   bindFileHandler();
   bindConnectivity();

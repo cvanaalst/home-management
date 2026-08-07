@@ -23,6 +23,9 @@ const GLYPHS = {
   filter: '<path d="M3 5h18l-7 8.2V19l-4 2v-7.8z"/>',
   sort: '<path d="M7 4.5v15M7 19.5l-3-3M7 19.5l3-3M17 19.5v-15M17 4.5l-3 3M17 4.5l3 3"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+  // Two offset sheets — the universal copy mark.
+  copy:
+    '<rect x="9" y="9" width="11.5" height="11.5" rx="2"/><path d="M6 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V6"/>',
 
   // ── the read-only lock ────────────────────────────────────────────────────
   lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',

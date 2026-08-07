@@ -38,6 +38,8 @@ import {
   makeFullImage,
   normalizeUrl,
   reminderTypesInUse,
+  FIELD_SUGGESTIONS,
+  normalizeFields,
   RECURRENCE_UNITS,
   normalizeRecurrence,
   nextOccurrence,
@@ -111,7 +113,8 @@ export function initDetailView(handlers = {}) {
   root.textContent = "";
   root.className = "view__body detail";
 
-  root.append(buildHead(), buildEvent(), buildReminder(), buildTags(), buildBody(), buildComment());
+  root.append(buildHead(), buildEvent(), buildReminder(), buildFields(), buildTags());
+  root.append(buildBody(), buildComment());
   root.append(buildLinks(), buildAttachments(), buildRelations(), buildHistory());
   root.append(buildVersions(), buildActions());
 
@@ -445,6 +448,33 @@ function buildReminder() {
   return wrap;
 }
 
+/**
+ * Named fields — provider, customer number, serial, policy number.
+ *
+ * Open by default on a record that has any, because these ARE the record for
+ * an account or a device: the thing you opened it to read. The suggestions
+ * come from the type (see FIELD_SUGGESTIONS), which is how seven types get
+ * seven sensible forms out of one mechanism.
+ */
+function buildFields() {
+  const wrap = collapsible("field.fields");
+  el.fieldsPanel = wrap;
+
+  el.fields = document.createElement("div");
+  el.fields.className = "fields";
+
+  el.fieldsAdd = document.createElement("button");
+  el.fieldsAdd.type = "button";
+  el.fieldsAdd.className = "btn btn--ghost edit-only";
+  el.fieldsAdd.dataset.i18n = "field.fields.add";
+
+  el.fieldKeyList = document.createElement("datalist");
+  el.fieldKeyList.id = "field-key-suggestions";
+
+  wrap.body.append(el.fields, el.fieldsAdd, el.fieldKeyList);
+  return wrap;
+}
+
 function buildTags() {
   const wrap = section("field.tags");
   el.tagHost = document.createElement("div");
@@ -620,6 +650,7 @@ function bindEvents() {
   el.type.addEventListener("change", () => {
     if (current) current.type = el.type.value;
     paintTypeBadge();
+    paintFields(); // the suggestions belong to the type
     markDirty();
   });
 
@@ -659,6 +690,16 @@ function bindEvents() {
 
   el.fileAdd.addEventListener("click", () => el.fileInput.click());
   el.fileInput.addEventListener("change", onFilesPicked);
+
+  el.fieldsAdd.addEventListener("click", () => {
+    current.fields = [...current.fields, { id: makeId(), key: "", value: "" }];
+    paintFields();
+    markDirty();
+    // Focus the key of the row just added; adding a row you then have to hunt
+    // for is a worse experience than not having the button.
+    const rows = el.fields.querySelectorAll(".field-row__key");
+    if (rows.length) rows[rows.length - 1].focus();
+  });
 
   el.linkedAdd.addEventListener("click", addRelation);
   el.historyAdd.addEventListener("click", () => callbacks.onLogEvent(current));
@@ -823,6 +864,7 @@ async function paint() {
     (value) => `<option value="${value}">${eventTypeLabel(value)}</option>`
   ).join("");
   el.eventType.value = current.eventType || DEFAULT_EVENT_TYPE;
+  paintFields();
   tagWidget.setTags(current.tags);
 
   const items = await getAllItems();
@@ -864,6 +906,7 @@ function applyLockState() {
   for (const field of [el.title, el.body, el.comment, el.reminderType]) {
     field.readOnly = locked;
   }
+  for (const input of el.fields.querySelectorAll("input")) input.readOnly = locked;
   el.amount.readOnly = locked;
   el.reminderAt.disabled = locked;
   el.recurrence.disabled = locked;
@@ -1375,6 +1418,7 @@ async function restoreVersion(entry) {
 function paintPanelSummaries(items) {
   const count = (n) => (n ? `(${n})` : t("panel.empty"));
 
+  el.fieldsPanel.setSummary(count(current.fields.length));
   el.commentPanel.setSummary(current.comment.trim() ? t("panel.filled") : t("panel.empty"));
   el.linksPanel.setSummary(count((current.links || []).length));
   el.attachmentsPanel.setSummary(count((current.attachments || []).length));
@@ -1388,6 +1432,7 @@ function paintPanelSummaries(items) {
 async function applyPanelState() {
   const stored = await loadPanelState();
   for (const [key, panel] of [
+    ["field.fields", el.fieldsPanel],
     ["field.comment", el.commentPanel],
     ["field.links", el.linksPanel],
     ["field.attachments", el.attachmentsPanel],
@@ -1422,6 +1467,121 @@ function downloadReminderIcs() {
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
   toast(t("reminder.toCalendar.done"), "success", { duration: 2400 });
+}
+
+/**
+ * Draw the field rows.
+ *
+ * Save-gated like the title and body, not write-through like links: these are
+ * content the user is typing, and half a customer number committed the moment
+ * they tab away is not a favour.
+ */
+function paintFields() {
+  el.fields.textContent = "";
+
+  // Suggestions follow the TYPE currently chosen in the form, not the stored
+  // one — changing an item to "Devices" should immediately offer a serial.
+  const type = el.type.value || current.type;
+  el.fieldKeyList.innerHTML = (FIELD_SUGGESTIONS[type] || [])
+    .map((key) => `<option value="${escapeAttr(t(`fields.suggest.${key}`))}"></option>`)
+    .join("");
+
+  if (!current.fields.length) {
+    el.fields.append(emptyLine("field.fields.none"));
+    return;
+  }
+  for (const field of current.fields) el.fields.append(fieldRow(field));
+}
+
+function fieldRow(field) {
+  const row = document.createElement("div");
+  row.className = "field-row";
+
+  const key = document.createElement("input");
+  key.type = "text";
+  key.className = "input field-row__key";
+  key.value = field.key;
+  key.setAttribute("list", "field-key-suggestions");
+  key.setAttribute("aria-label", t("field.fields.key"));
+  key.addEventListener("input", () => {
+    field.key = key.value;
+    markDirty();
+  });
+
+  const value = document.createElement("input");
+  value.type = "text";
+  // Monospace: these are reference numbers, read a character at a time and
+  // usually compared against something on paper.
+  value.className = "input field-row__value";
+  value.value = field.value;
+  value.setAttribute("aria-label", t("field.fields.value"));
+  value.addEventListener("input", () => {
+    field.value = value.value;
+    markDirty();
+  });
+
+  // The whole point of the panel. A contract number exists to be pasted
+  // somewhere else, and selecting it by hand on a phone is genuinely painful.
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "icon-btn field-row__copy";
+  copy.dataset.i18nAria = "action.copy";
+  copy.dataset.i18nTitle = "action.copy";
+  copy.innerHTML = icon("copy", { size: 16 });
+  copy.addEventListener("click", () => copyValue(field.value, copy));
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "icon-btn field-row__remove edit-only";
+  remove.dataset.i18nAria = "field.fields.remove";
+  remove.dataset.i18nTitle = "field.fields.remove";
+  remove.innerHTML = icon("close", { size: 16 });
+  remove.addEventListener("click", () => {
+    current.fields = current.fields.filter((f) => f.id !== field.id);
+    paintFields();
+    markDirty();
+  });
+
+  row.append(key, value, copy, remove);
+  return row;
+}
+
+/**
+ * Copy to the clipboard, with the button itself as the confirmation.
+ *
+ * A toast for something this small would be louder than the action; a tick on
+ * the button says it landed and gets out of the way.
+ */
+async function copyValue(text, button) {
+  const value = String(text || "");
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    // Safari refuses the API outside a trusted gesture in some contexts, and
+    // an insecure origin has no clipboard at all. Fall back rather than fail.
+    const helper = document.createElement("textarea");
+    helper.value = value;
+    helper.setAttribute("readonly", "");
+    helper.style.position = "fixed";
+    helper.style.opacity = "0";
+    document.body.append(helper);
+    helper.select();
+    try {
+      document.execCommand("copy");
+    } catch {
+      toast(t("action.copy.failed"), "error");
+      helper.remove();
+      return;
+    }
+    helper.remove();
+  }
+  button.classList.add("is-copied");
+  button.innerHTML = icon("check", { size: 16 });
+  setTimeout(() => {
+    button.classList.remove("is-copied");
+    button.innerHTML = icon("copy", { size: 16 });
+  }, 1400);
 }
 
 /** An event shows what happened where a record shows its type. */
@@ -1487,6 +1647,7 @@ function snapshot() {
     eventType: el.eventType.value,
     amount: el.amount.value,
     tags: tagWidget.getTags(),
+    fields: current ? current.fields.map((f) => `${f.key}=${f.value}`).join("|") : "",
   });
 }
 
@@ -1644,6 +1805,7 @@ async function save() {
     current.eventType = el.eventType.value;
     current.amount = el.amount.value === "" ? null : Number(el.amount.value);
   }
+  current.fields = normalizeFields(current.fields);
   current.tags = tagWidget.getTags();
 
   try {

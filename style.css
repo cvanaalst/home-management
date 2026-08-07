@@ -1516,6 +1516,54 @@ body:not(.is-locked) .detail__title {
   min-width: 0;
 }
 
+/* ── Structured fields ────────────────────────────────────────────────── */
+
+/* The one useful fact on the row's second line gets the weight the date had. */
+.record__meta-strong {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* On a phone the name goes above the value: three inputs and two buttons in
+   one row leaves nothing legible. */
+@media (max-width: 520px) {
+  .field-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+  .field-row__key {
+    grid-column: 1 / -1;
+  }
+}
+
+.field-row__key {
+  font-size: var(--step--1);
+}
+
+/* Reference numbers are read a character at a time and compared against
+   something on paper, so they get a face where 0 and O differ. */
+.field-row__value {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.01em;
+}
+
+.field-row__copy.is-copied {
+  color: var(--success);
+}
+
 .detail__row {
   display: flex;
   align-items: center;
@@ -2763,6 +2811,22 @@ body[data-density="compact"] .timeline__title {
 .tile--accent .tile__value {
   color: var(--accent);
   font-size: var(--step-2);
+}
+
+.print__fields {
+  width: auto;
+  margin: 6px 0 10px;
+}
+
+.print__fields th {
+  width: auto;
+  padding-right: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.print__fields td {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .print__num {

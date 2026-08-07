@@ -63,6 +63,7 @@ import {
   RECURRENCE_UNITS, normalizeRecurrence, normalizeAmount,
   nextOccurrence, completeReminder, dueNotification,
   computeSpend, computeIncidents, computeUpcoming,
+  normalizeFields, FIELD_SUGGESTIONS, FIELD_SUGGESTION_KEYS, countEventsBySubject,
   versionKey, versionKeyRange, VERSION_KEEP, STORE_VERSIONS,
   diffRecords, applyVersion, DIFFABLE_FIELDS, getVersions, clearVersions,
   normalizeSearchText, buildHaystack, stripTrackingParams, normalizeUrl,
@@ -1420,7 +1421,7 @@ group("db.js · makeRecord (the §5 envelope)");
   const ENVELOPE = [
     "id", "type", "createdAt", "updatedAt", "deletedAt", "restoredAt", "purgedAt",
     "title", "comment", "tags", "pinned", "reminderAt", "linkedIds",
-    "body", "reminderType", "recurrence", "links", "attachments",
+    "body", "reminderType", "recurrence", "fields", "links", "attachments",
     "kind", "occurredAt", "eventType", "amount",
   ];
   for (const field of ENVELOPE) {
@@ -1755,6 +1756,87 @@ group("db.js · applyVersion");
   assertEqual(current.title, "Nu", "…and the current record is left untouched");
 }
 assertEqual(applyVersion(null, fx({ id: "a" })), null, "no current record, nothing to apply to");
+
+group("db.js · normalizeFields (structured details)");
+
+assertDeepEqual(normalizeFields(null), [], "null gives no fields");
+assertDeepEqual(normalizeFields("nonsense"), [], "a non-array gives no fields");
+assertDeepEqual(normalizeFields([]), [], "empty stays empty");
+{
+  const out = normalizeFields([{ id: "1", key: " Klantnummer ", value: " 998877 " }]);
+  assertEqual(out.length, 1, "a complete field survives");
+  assertEqual(out[0].key, "Klantnummer", "the key is trimmed");
+  assertEqual(out[0].value, "998877", "…and so is the value");
+}
+{
+  const out = normalizeFields([{ key: "Polisnummer" }]);
+  assertEqual(out.length, 1,
+    "a key with NO value is kept — 'policy number: (blank)' is a note that one is still needed");
+  assertEqual(out[0].value, "", "…with an empty value");
+  assertTrue(!!out[0].id, "…and an id minted for it");
+}
+{
+  const out = normalizeFields([{ key: "   ", value: "orphan" }, { key: "Goed", value: "x" }]);
+  assertDeepEqual(out.map((f) => f.key), ["Goed"],
+    "a field with no KEY is dropped — it could never be found, read or exported");
+}
+{
+  const long = normalizeFields([{ key: "k".repeat(200), value: "v".repeat(900) }]);
+  assertEqual(long[0].key.length, 60, "keys are capped");
+  assertEqual(long[0].value.length, 500, "values are capped");
+}
+{
+  // Every suggestion key must have a label in both languages, or the datalist
+  // shows raw keys like "customerNumber".
+  const missing = [];
+  for (const lang of ["nl", "en"]) {
+    setLang(lang);
+    for (const key of FIELD_SUGGESTION_KEYS) {
+      if (t(`fields.suggest.${key}`) === `fields.suggest.${key}`) missing.push(`${lang}:${key}`);
+    }
+  }
+  setLang("nl");
+  assertDeepEqual(missing, [], "every suggested field name is translated in both languages");
+}
+{
+  for (const type of TYPES) {
+    assertTrue(Array.isArray(FIELD_SUGGESTIONS[type]) && FIELD_SUGGESTIONS[type].length,
+      `${type} suggests at least one field, so no type opens an empty form`);
+  }
+}
+{
+  // Fields must be searchable: a policy number is exactly what gets typed in.
+  const rec = hydrateRecord({ id: "a", title: "Verzekering",
+                              fields: [{ id: "1", key: "Polisnummer", value: "998877" }] });
+  assertTrue(buildHaystack(rec).includes("998877"), "the VALUE is searchable");
+  assertTrue(buildHaystack(rec).includes("polisnummer"), "…and so is the key");
+  assertDeepEqual(ids(queryItemSet([rec], { search: "998877" })), ["a"],
+    "…so the query engine finds a record by its reference number");
+}
+{
+  const before = fx({ id: "a", fields: [{ id: "1", key: "Serie", value: "AAA" }] });
+  const after = { ...before, fields: [{ id: "1", key: "Serie", value: "BBB" }] };
+  assertDeepEqual(diffRecords(before, after), ["fields"], "a changed detail shows in a revision diff");
+}
+
+group("db.js · countEventsBySubject");
+
+{
+  const items = [
+    fx({ id: "b", title: "CV-ketel" }),
+    fx({ id: "r", title: "Router" }),
+    fx({ id: "e1", kind: "event", linkedIds: ["b"] }),
+    fx({ id: "e2", kind: "event", linkedIds: ["b"] }),
+    fx({ id: "e3", kind: "event", linkedIds: ["r"] }),
+    fx({ id: "e4", kind: "event", linkedIds: [] }),
+    fx({ id: "e5", kind: "event", linkedIds: ["b"], deletedAt: "2026-01-01T00:00:00.000Z" }),
+  ];
+  const counts = countEventsBySubject(items);
+  assertEqual(counts.get("b"), 2, "two live events on the boiler — the deleted one does not count");
+  assertEqual(counts.get("r"), 1, "one on the router");
+  assertEqual(counts.get("nobody"), undefined, "nothing invented for a subject with no events");
+}
+assertEqual(countEventsBySubject(null).size, 0, "a null set does not throw");
 
 group("db.js · normalizeRecurrence");
 

@@ -25,6 +25,7 @@ import {
   putItem,
   getItem,
   sortTagsByRecency,
+  countEventsBySubject,
 } from "./db.js";
 import {
   toast,
@@ -51,6 +52,9 @@ let tagRow;
 
 /** Ids hidden from the list while their undo window is still open. */
 const pendingDeletes = new Set();
+
+/** subjectId -> number of live events pointing at it. Rebuilt per render. */
+let eventCounts = new Map();
 
 let loaded = 0; // how many rows are currently rendered
 let lastTotal = 0;
@@ -429,6 +433,11 @@ async function paintPage({ keepScroll, seq }) {
   loaded = visible.length;
 
   const today = todayIso();
+
+  // One pass for every row's event count. Counting per row would be a full
+  // scan per record — fine at ten, not at a thousand.
+  eventCounts = countEventsBySubject(await getAllItems());
+
   const rows = document.createDocumentFragment();
   for (const item of visible) rows.append(buildRow(item, today));
   listEl.textContent = "";
@@ -508,9 +517,28 @@ function buildRow(item, today) {
 
     const meta = document.createElement("span");
     meta.className = "record__meta";
+
+    // `updatedAt` is what this line USED to say, for every row, always. On a
+    // set of records touched in the same sitting that is the same date eight
+    // times over — a line of pure noise where the most useful fact about the
+    // record could be. So: what is due, then how much has happened to it, and
+    // only if neither exists does the date get the space by default.
     const when = document.createElement("span");
     when.textContent = formatDate(item.updatedAt, state.lang);
-    meta.append(when);
+    const eventCount = eventCounts.get(item.id) || 0;
+    if (item.reminderAt) {
+      const soon = document.createElement("span");
+      soon.className = "record__meta-strong";
+      soon.textContent = t("list.meta.due", { date: formatDate(item.reminderAt, state.lang) });
+      meta.append(soon);
+    } else if (eventCount) {
+      const events = document.createElement("span");
+      events.className = "record__meta-strong";
+      events.textContent = t("list.meta.events", { count: eventCount });
+      meta.append(events);
+    } else {
+      meta.append(when);
+    }
     for (const tag of item.tags.slice(0, 3)) {
       const chip = document.createElement("span");
       chip.className = "tag tag--mini";

@@ -61,7 +61,7 @@ export const CSV_SEPARATOR = ";";
 export const CSV_COLUMNS = [
   "kind", "type", "title", "tags", "occurredAt", "eventType", "amount",
   "reminderAt", "reminderType", "pinned",
-  "comment", "links", "attachments", "body", "createdAt", "updatedAt", "id",
+  "comment", "fields", "links", "attachments", "body", "createdAt", "updatedAt", "id",
 ];
 
 /**
@@ -99,6 +99,7 @@ export function recordToRow(record, { t, lang = "nl" } = {}) {
     reminderType: record.reminderType || "",
     pinned: record.pinned ? "1" : "",
     comment: record.comment || "",
+    fields: (record.fields || []).map((f) => `${f.key}: ${f.value}`).join(" | "),
     links: (record.links || []).map((l) => `${l.label || ""} <${l.url || ""}>`).join(" | "),
     attachments: (record.attachments || []).map((a) => a.filename).join(" | "),
     body: record.body || "",
@@ -366,6 +367,18 @@ function printRecord(record, { label, lang, today, includeBody }) {
   if ((record.tags || []).length) {
     parts.push(
       `<p class="print__tags">${record.tags.map((tag) => `<span>${esc(tag)}</span>`).join(" ")}</p>`
+    );
+  }
+
+  // Above the body: on a printed account or device sheet, the reference
+  // numbers are what someone is holding the paper to read.
+  if ((record.fields || []).length) {
+    parts.push(
+      `<table class="print__fields">` +
+        record.fields
+          .map((f) => `<tr><th>${esc(f.key)}</th><td>${esc(f.value)}</td></tr>`)
+          .join("") +
+        `</table>`
     );
   }
 
