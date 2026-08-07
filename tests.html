@@ -1430,6 +1430,71 @@ group("help.js");
   });
   assertDeepEqual(stray, [], "no help paragraph is split across two source lines (§13.12)");
 }
+{
+  // The help went eight phases without an update and ended up describing type
+  // names that no longer existed and reminders that "never repeat" months
+  // after recurrence shipped. Help that is WRONG is worse than help that is
+  // missing, because the user trusts it — so every shipped feature has to be
+  // findable in both languages, and this test is what makes forgetting loud.
+  const nl = helpText("nl");
+  const en = helpText("en");
+  const covered = [
+    ["timeline",     /tijdlijn/i,                    /timeline/i],
+    ["events",       /gebeurtenis/i,                 /event/i],
+    ["recurrence",   /herhal/i,                      /repeat/i],
+    ["mark done",    /uitgevoerd/i,                  /mark done/i],
+    ["calendar/ics", /\.ics|agenda/i,                /\.ics|calendar/i],
+    ["notifications",/melding/i,                     /notification/i],
+    ["versions",     /eerdere versies/i,             /earlier versions/i],
+    ["sync",         /synchronis/i,                  /sync/i],
+    ["backup",       /back-?up/i,                    /backup/i],
+    ["encryption",   /versleutel/i,                  /encrypt/i],
+    ["passphrase",   /wachtwoordzin/i,               /passphrase/i],
+    ["detail fields",/gegevensveld|gegevens per item/i, /detail fields|details per item/i],
+    ["copy button",  /kopieer/i,                     /copy button/i],
+    ["saved views",  /weergave bewaren/i,            /save this view/i],
+    ["bulk select",  /meerdere.*selecteren|selecteren/i, /select several/i],
+    ["shortcuts",    /sneltoets/i,                   /keyboard shortcut/i],
+    ["paste",        /plakken/i,                     /pasting|paste/i],
+    ["collapsing",   /dichtgeklapt|uitklappen/i,     /collapsed|collapsing/i],
+    ["insights",     /inzichten/i,                   /insights/i],
+    ["install",      /beginscherm/i,                 /home screen/i],
+  ];
+  const missing = [];
+  for (const [name, nlRe, enRe] of covered) {
+    if (!nlRe.test(nl)) missing.push(`nl:${name}`);
+    if (!enRe.test(en)) missing.push(`en:${name}`);
+  }
+  assertDeepEqual(missing, [], "every shipped feature is explained in the help, in both languages");
+}
+{
+  // The type names changed in build 17 and the help still listed the old ones
+  // for eighteen builds. Assert the CURRENT set appears and the retired ones
+  // do not, so a rename cannot quietly leave the help lying.
+  const nl = helpText("nl");
+  const en = helpText("en");
+  for (const label of ["Document", "Configuratie", "Account", "Nutsvoorzieningen",
+                       "Apparaten", "Kalender", "Diversen"]) {
+    assertTrue(nl.includes(label), `the Dutch help lists the current type "${label}"`);
+  }
+  for (const label of ["Document", "Configuration", "Account", "Utilities",
+                       "Devices", "Calendar", "Various"]) {
+    assertTrue(en.includes(label), `the English help lists the current type "${label}"`);
+  }
+  // …and none of the names retired in build 17.
+  for (const gone of ["garantie", "verzekering", "notitie", "contact"]) {
+    assertTrue(!new RegExp(`^Elk item.*${gone}`, "im").test(nl),
+      `the Dutch help does not still list the retired type "${gone}"`);
+  }
+}
+{
+  // The one claim that must never go stale in the other direction: the help
+  // used to say reminders "do not repeat themselves", months after they did.
+  assertTrue(!/herhalen zichzelf niet/i.test(helpText("nl")),
+    "the Dutch help no longer claims reminders never repeat");
+  assertTrue(!/do not repeat/i.test(helpText("en")),
+    "the English help no longer claims reminders never repeat");
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // db.js — the record contract
