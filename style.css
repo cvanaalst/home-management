@@ -1574,15 +1574,20 @@ body.is-selecting .record__main {
   gap: var(--space-2);
 }
 
+/* FOUR columns for four children: name, value, copy, remove.
+   Three columns left the remove button with nowhere to go on the first row, so
+   it wrapped onto a line of its own underneath — a whole row of height for one
+   16px icon. */
 .field-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto auto;
   gap: var(--space-2);
   align-items: center;
 }
 
-/* On a phone the name goes above the value: three inputs and two buttons in
-   one row leaves nothing legible. */
+/* On a phone the name goes above the value — two inputs and two buttons on one
+   line leaves nothing legible — and the buttons sit beside the value, not
+   below it. */
 @media (max-width: 520px) {
   .field-row {
     grid-template-columns: minmax(0, 1fr) auto auto;
