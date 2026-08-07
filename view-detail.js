@@ -22,7 +22,7 @@
  */
 
 import { state } from "./state.js";
-import { t, typeLabel, eventTypeLabel } from "./i18n.js";
+import { t, tCount, typeLabel, eventTypeLabel } from "./i18n.js";
 import { icon, eventIcon } from "./icons.js";
 import {
   TYPES,
@@ -1282,8 +1282,8 @@ function paintEventPanels(items) {
   );
   el.historySummary.hidden = false;
   el.historySummary.textContent = hasAmounts
-    ? `${t("history.count", { count: history.length })} · ${t("history.total", { amount: formatAmount(spent, state.lang) })}`
-    : t("history.count", { count: history.length });
+    ? `${tCount("history.count", history.length)} · ${t("history.total", { amount: formatAmount(spent, state.lang) })}`
+    : tCount("history.count", history.length);
 
   for (const entry of history) el.history.append(historyRow(entry));
 }

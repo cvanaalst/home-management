@@ -197,7 +197,7 @@ export function buildEventPrintHtml(events, records, opts = {}) {
     `<h1>${esc(title || label("print.events.title"))}</h1>` +
     `<p class="print__meta">${esc(label("print.generated"))} ` +
     `${esc(formatDateTime(new Date().toISOString(), lang))} · ` +
-    `${esc(label("print.events.count", { count: live.length }))}` +
+    `${esc(count(label, "print.events.count", live.length))}` +
     (withAmount
       ? ` · ${esc(label("print.events.total", { amount: formatAmount(total, lang) }))}`
       : "") +
@@ -274,6 +274,19 @@ export function buildEventPrintHtml(events, records, opts = {}) {
     .join("");
 
   return head + body;
+}
+
+/**
+ * Singular/plural without importing i18n. PURE.
+ *
+ * report.js takes its translator as a parameter by design (§8.6) so it stays
+ * testable with a stub, which means it cannot call tCount directly — it asks
+ * for the `.one` key and falls back if the caller's dictionary has none.
+ */
+function count(label, key, n) {
+  if (Math.abs(n) !== 1) return label(key, { count: n });
+  const one = label(`${key}.one`);
+  return one === `${key}.one` ? label(key, { count: n }) : one;
 }
 
 /** "augustus 2026" from "2026-08". PURE — kept here so report.js stays standalone. */

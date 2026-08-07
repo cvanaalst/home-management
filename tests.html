@@ -78,7 +78,7 @@ import {
   getMeta, setMeta, deleteMeta, logActivity, getActivityLog, clearActivityLog,
   getStats, getStorageEstimate,
 } from "./db.js";
-import { t, typeLabel, eventTypeLabel, kindLabel, _dictKeys } from "./i18n.js";
+import { t, tCount, typeLabel, eventTypeLabel, kindLabel, _dictKeys } from "./i18n.js";
 import { icon, typeIcon, eventIcon, ICON_NAMES } from "./icons.js";
 import { state, setLang } from "./state.js";
 import { VERSION, versionLine } from "./version.js";
@@ -1184,6 +1184,37 @@ group("report.js · buildEventPrintHtml");
   assertTrue(/559|\u20ac/.test(html), "the total is shown");
 }
 {
+  // report.js takes its translator as a parameter (§8.6) so it stays testable
+  // with a stub, which means it cannot call tCount. It asks for the `.one` key
+  // and falls back when the dictionary has none — both paths matter.
+  const withSingular = (key, vars) => {
+    if (key === "print.events.count.one") return "1 gebeurtenis";
+    return vars ? `${key}:${JSON.stringify(vars)}` : key;
+  };
+  const one = buildEventPrintHtml(
+    [fx({ id: "e", kind: "event", title: "Een", occurredAt: "2026-03-01" })],
+    [], { t: withSingular }
+  );
+  assertTrue(one.includes("1 gebeurtenis"),
+    "a single event uses the singular when the dictionary provides one");
+
+  const many = buildEventPrintHtml(
+    [fx({ id: "a", kind: "event", occurredAt: "2026-03-01" }),
+     fx({ id: "b", kind: "event", occurredAt: "2026-03-02" })],
+    [], { t: withSingular }
+  );
+  assertTrue(many.includes("print.events.count:") && !many.includes("1 gebeurtenis"),
+    "…and two use the plural");
+
+  // A dictionary with no `.one` must not leak the raw key onto a printed page.
+  const noSingular = (key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key);
+  const fallback = buildEventPrintHtml(
+    [fx({ id: "e", kind: "event", occurredAt: "2026-03-01" })], [], { t: noSingular }
+  );
+  assertTrue(!fallback.includes("print.events.count.one"),
+    "with no singular available it falls back to the plural rather than printing the key name");
+}
+{
   const stub = (key) => key;
   const html = buildEventPrintHtml([], [], { t: stub });
   assertTrue(html.includes("print.events.none"), "an empty log says so rather than printing a blank page");
@@ -1818,6 +1849,44 @@ assertDeepEqual(normalizeFields([]), [], "empty stays empty");
   const before = fx({ id: "a", fields: [{ id: "1", key: "Serie", value: "AAA" }] });
   const after = { ...before, fields: [{ id: "1", key: "Serie", value: "BBB" }] };
   assertDeepEqual(diffRecords(before, after), ["fields"], "a changed detail shows in a revision diff");
+}
+
+group("i18n.js · tCount (singular vs plural)");
+
+{
+  setLang("nl");
+  assertEqual(tCount("list.meta.events", 1), "1 gebeurtenis",
+    "one event is singular — '1 gebeurtenissen' is what a machine writes, not a person");
+  assertEqual(tCount("list.meta.events", 3), "3 gebeurtenissen", "three is plural");
+  assertEqual(tCount("list.meta.events", 0), "0 gebeurtenissen", "zero takes the plural in Dutch");
+  assertEqual(tCount("bulk.delete.done", 1), "1 item verwijderd", "one record deleted, singular");
+  assertEqual(tCount("history.count", 1), "1 gebeurtenis", "the history summary too");
+
+  setLang("en");
+  assertEqual(tCount("list.meta.events", 1), "1 event", "English singular");
+  assertEqual(tCount("list.meta.events", 2), "2 events", "English plural");
+  assertEqual(tCount("bulk.delete.done", 1), "Deleted 1 record", "…and the delete confirmation");
+  setLang("nl");
+}
+{
+  // The existing reminder strings were written against {days} and must keep
+  // working now that {count} is passed as well.
+  setLang("nl");
+  assertEqual(tCount("reminder.days", 5), "Over 5 dagen", "the {days} strings are untouched");
+  assertEqual(tCount("reminder.days", 1), "Over 1 dag", "…including their singular");
+}
+{
+  // Every plural key must have its .one sibling in BOTH languages, or a count
+  // of one silently falls through to the key name.
+  const missing = [];
+  for (const lang of ["nl", "en"]) {
+    setLang(lang);
+    for (const key of ["list.meta.events", "history.count", "print.events.count", "bulk.delete.done"]) {
+      if (t(`${key}.one`) === `${key}.one`) missing.push(`${lang}:${key}`);
+    }
+  }
+  setLang("nl");
+  assertDeepEqual(missing, [], "every plural key has a singular in both languages");
 }
 
 group("db.js · saved views");

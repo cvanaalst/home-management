@@ -14,7 +14,7 @@
  */
 
 import { state } from "./state.js";
-import { t, typeLabel } from "./i18n.js";
+import { t, tCount, typeLabel } from "./i18n.js";
 import { icon } from "./icons.js";
 import {
   TYPES,
@@ -366,7 +366,7 @@ function bindSelection() {
     const ok = await confirmDialog(t("bulk.delete.confirm", { count }), t("action.delete"));
     if (!ok) return;
     for (const id of selected) await softDeleteItem(id);
-    toast(t("bulk.delete.done", { count }), "info");
+    toast(tCount("bulk.delete.done", count), "info");
     setSelecting(false);
     callbacks.onChanged();
   });
@@ -774,7 +774,7 @@ function buildRow(item, today) {
     } else if (eventCount) {
       const events = document.createElement("span");
       events.className = "record__meta-strong";
-      events.textContent = t("list.meta.events", { count: eventCount });
+      events.textContent = tCount("list.meta.events", eventCount);
       meta.append(events);
     } else {
       meta.append(when);

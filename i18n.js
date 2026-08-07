@@ -136,6 +136,7 @@ const dict = {
     "print.events": "Logboek afdrukken",
     "print.events.title": "Logboek \u2014 wat er gebeurd is",
     "print.events.count": "{count} gebeurtenissen",
+    "print.events.count.one": "1 gebeurtenis",
     "print.events.total": "{amount} in totaal",
     "print.events.none": "Geen gebeurtenissen om af te drukken.",
     "print.col.date": "Datum",
@@ -161,8 +162,10 @@ const dict = {
     "bulk.export": "Exporteren",
     "bulk.delete.confirm": "{count} items verwijderen? Ze gaan naar de prullenbak.",
     "bulk.delete.done": "{count} items verwijderd",
+    "bulk.delete.done.one": "1 item verwijderd",
     "list.meta.due": "Herinnering {date}",
     "list.meta.events": "{count} gebeurtenissen",
+    "list.meta.events.one": "1 gebeurtenis",
     "field.fields": "Gegevens",
     "field.fields.add": "Gegeven toevoegen",
     "field.fields.none": "Nog geen gegevens.",
@@ -219,6 +222,7 @@ const dict = {
     "history.add": "Gebeurtenis vastleggen",
     "history.empty": "Nog niets vastgelegd voor dit item.",
     "history.count": "{count} gebeurtenissen",
+    "history.count.one": "1 gebeurtenis",
     "history.total": "{amount} in totaal",
     "nav.list": "Overzicht",
     "nav.settings": "Instellingen",
@@ -731,6 +735,7 @@ const dict = {
     "print.events": "Print the log",
     "print.events.title": "Log \u2014 what happened",
     "print.events.count": "{count} events",
+    "print.events.count.one": "1 event",
     "print.events.total": "{amount} in total",
     "print.events.none": "No events to print.",
     "print.col.date": "Date",
@@ -756,8 +761,10 @@ const dict = {
     "bulk.export": "Export",
     "bulk.delete.confirm": "Delete {count} records? They go to the trash.",
     "bulk.delete.done": "Deleted {count} records",
+    "bulk.delete.done.one": "Deleted 1 record",
     "list.meta.due": "Reminder {date}",
     "list.meta.events": "{count} events",
+    "list.meta.events.one": "1 event",
     "field.fields": "Details",
     "field.fields.add": "Add a detail",
     "field.fields.none": "No details yet.",
@@ -814,6 +821,7 @@ const dict = {
     "history.add": "Log an event",
     "history.empty": "Nothing recorded for this item yet.",
     "history.count": "{count} events",
+    "history.count.one": "1 event",
     "history.total": "{amount} in total",
     "nav.list": "Overview",
     "nav.settings": "Settings",
@@ -1234,7 +1242,11 @@ export function t(key, vars) {
  * two forms, so a `.one` sibling key is enough — no Intl.PluralRules needed.
  */
 export function tCount(key, count) {
-  return Math.abs(count) === 1 ? t(`${key}.one`) : t(key, { days: Math.abs(count) });
+  const n = Math.abs(count);
+  // Both `days` and `count` are offered: the reminder strings were written
+  // against {days} and new callers read better with {count}. Passing both
+  // costs nothing and avoids rewriting a dozen working strings.
+  return n === 1 ? t(`${key}.one`) : t(key, { days: n, count: n });
 }
 
 /** Localised label for a record type. */
