@@ -9,10 +9,10 @@
 export const VERSION = {
   designer: "Chris",
   date: "26-08",
-  build: 32,
+  build: 33,
 };
 
-/** e.g. "Chris · 26-08 · build 32" — the exact string shown in About. */
+/** e.g. "Chris · 26-08 · build 33" — the exact string shown in About. */
 export function versionLine() {
   return `${VERSION.designer} · ${VERSION.date} · build ${VERSION.build}`;
 }

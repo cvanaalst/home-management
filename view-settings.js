@@ -763,6 +763,19 @@ async function exportIcs() {
   download(buildIcs(items), exportFilename("ics"), "text/calendar");
 }
 
+/**
+ * Export a chosen subset. Used by bulk selection, so "export these six" is a
+ * real answer rather than "export everything and edit the file".
+ */
+export async function exportRecords(records) {
+  if (!records || !records.length) {
+    toast(t("export.empty"), "info");
+    return;
+  }
+  const payload = toJsonExport(records, { build: VERSION.build });
+  download(JSON.stringify(payload, null, 2), exportFilename("json"), "application/json");
+}
+
 async function exportJson() {
   // Tombstones included: this is the backup format restore reads back.
   const items = await getAllItems();

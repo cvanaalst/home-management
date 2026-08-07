@@ -26,10 +26,17 @@ import {
   getItem,
   sortTagsByRecency,
   countEventsBySubject,
+  normalizeViews,
+  isEmptyFilterSet,
+  SAVED_VIEW_MAX,
+  getMeta,
+  setMeta,
 } from "./db.js";
 import {
   toast,
   actionSheet,
+  confirmDialog,
+  promptText,
   formatDate,
   daysUntil,
   todayIso,
@@ -42,7 +49,7 @@ const PAGE_SIZE = 25;
 
 const $ = (id) => document.getElementById(id);
 
-let callbacks = { onOpen: () => {}, onPullRefresh: async () => {} };
+let callbacks = { onOpen: () => {}, onPullRefresh: async () => {}, onChanged: () => {}, onExport: () => {} };
 let listEl;
 let placeholderEl;
 let loadMoreEl;
@@ -52,6 +59,17 @@ let tagRow;
 
 /** Ids hidden from the list while their undo window is still open. */
 const pendingDeletes = new Set();
+
+/**
+ * Ids currently selected for a bulk action, and whether selection mode is on.
+ *
+ * Kept OUT of state.js: this is transient interaction state that must not
+ * survive a tab switch, let alone a reload. Leaving a selection behind and
+ * acting on it later is how someone deletes forty records they forgot were
+ * ticked.
+ */
+const selected = new Set();
+let selecting = false;
 
 /** subjectId -> number of live events pointing at it. Rebuilt per render. */
 let eventCounts = new Map();
@@ -146,10 +164,227 @@ export function initListView(handlers = {}) {
     renderPage({ keepScroll: true });
   });
 
+  bindSelection();
+  $("btn-save-view").addEventListener("click", saveCurrentView);
+  loadViews();
   bindRowInteraction();
   bindPullToRefresh();
   paintSortOptions();
   paintTypeFilters();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Saved views (§9)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const VIEWS_KEY = "list.savedViews";
+let savedViews = [];
+
+async function loadViews() {
+  savedViews = normalizeViews(await getMeta(VIEWS_KEY, []));
+  paintViews();
+}
+
+async function persistViews() {
+  savedViews = normalizeViews(savedViews);
+  await setMeta(VIEWS_KEY, savedViews);
+  paintViews();
+}
+
+/** Does the current filter set match this saved one? */
+function viewIsActive(view) {
+  const f = state.filters;
+  const v = view.filters;
+  return (
+    (f.search || "") === v.search &&
+    f.type === v.type &&
+    f.dateFrom === v.dateFrom &&
+    f.dateTo === v.dateTo &&
+    [...f.tags].sort().join("|") === [...v.tags].sort().join("|")
+  );
+}
+
+function paintViews() {
+  const row = $("saved-views");
+  if (!row) return;
+  row.textContent = "";
+  row.hidden = savedViews.length === 0;
+
+  for (const view of savedViews) {
+    const chip = document.createElement("span");
+    chip.className = `chip chip--view${viewIsActive(view) ? " chip--active" : ""}`;
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "chip__open";
+    open.textContent = view.name;
+    open.addEventListener("click", () => applyView(view));
+
+    // Removing a view is the only destructive thing here and it is trivially
+    // redoable, so it needs no confirmation — just a small, deliberate target.
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "tag__remove";
+    remove.setAttribute("aria-label", t("views.remove", { name: view.name }));
+    remove.innerHTML = icon("close", { size: 12 });
+    remove.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      savedViews = savedViews.filter((v) => v.id !== view.id);
+      await persistViews();
+    });
+
+    chip.append(open, remove);
+    row.append(chip);
+  }
+}
+
+function applyView(view) {
+  const f = view.filters;
+  state.filters.search = f.search;
+  state.filters.type = f.type;
+  state.filters.tags = [...f.tags];
+  state.filters.dateFrom = f.dateFrom;
+  state.filters.dateTo = f.dateTo;
+  state.filters.sortBy = f.sortBy;
+  state.filters.sortDir = f.sortDir;
+
+  $("search-input").value = f.search;
+  $("date-from").value = f.dateFrom;
+  $("date-to").value = f.dateTo;
+  $("sort-field").value = f.sortBy;
+  paintSortDirection();
+  paintTypeFilters();
+  paintViews();
+  refreshList();
+}
+
+async function saveCurrentView() {
+  // Saving "everything" is a button that does nothing, which is worse than a
+  // button that refuses.
+  if (isEmptyFilterSet(state.filters)) {
+    toast(t("views.nothingToSave"), "info");
+    return;
+  }
+  if (savedViews.length >= SAVED_VIEW_MAX) {
+    toast(t("views.full", { max: SAVED_VIEW_MAX }), "info");
+    return;
+  }
+  const name = await promptText(t("views.save.prompt"), t("views.save"));
+  if (!name) return;
+
+  savedViews = [
+    ...savedViews,
+    {
+      id: undefined,
+      name,
+      filters: {
+        search: state.filters.search,
+        type: state.filters.type,
+        tags: [...state.filters.tags],
+        dateFrom: state.filters.dateFrom,
+        dateTo: state.filters.dateTo,
+        sortBy: state.filters.sortBy,
+        sortDir: state.filters.sortDir,
+      },
+    },
+  ];
+  await persistViews();
+  toast(t("views.saved", { name }), "success");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Bulk selection (§9)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function isSelecting() {
+  return selecting;
+}
+
+function setSelecting(on) {
+  selecting = on;
+  if (!on) selected.clear();
+  document.body.classList.toggle("is-selecting", on);
+  paintSelectionBar();
+  refreshList();
+}
+
+/** Leave selection mode. Called by app.js when the view changes. */
+export function exitSelection() {
+  if (selecting) setSelecting(false);
+}
+
+function toggleSelected(id) {
+  if (selected.has(id)) selected.delete(id);
+  else selected.add(id);
+  paintSelectionBar();
+  // Repaint just the one row's tick rather than the whole list.
+  const row = listEl.querySelector(`[data-id="${id}"]`);
+  if (row) row.classList.toggle("is-selected", selected.has(id));
+}
+
+function paintSelectionBar() {
+  const bar = $("selection-bar");
+  if (!bar) return;
+  bar.hidden = !selecting;
+  $("selection-count").textContent = t("bulk.count", { count: selected.size });
+  for (const id of ["btn-bulk-tag", "btn-bulk-type", "btn-bulk-delete", "btn-bulk-export"]) {
+    const button = $(id);
+    if (button) button.disabled = selected.size === 0;
+  }
+}
+
+function bindSelection() {
+  $("btn-select").addEventListener("click", () => setSelecting(!selecting));
+  $("btn-selection-done").addEventListener("click", () => setSelecting(false));
+
+  $("btn-bulk-tag").addEventListener("click", async () => {
+    const tag = await promptText(t("bulk.tag.prompt"), t("bulk.tag"));
+    if (!tag) return;
+    await eachSelected((record) => {
+      const tags = new Set([...(record.tags || []), tag.trim()]);
+      return { ...record, tags: [...tags] };
+    });
+    toast(t("bulk.tag.done", { count: selected.size, tag: tag.trim() }), "success");
+    setSelecting(false);
+  });
+
+  $("btn-bulk-type").addEventListener("click", async () => {
+    const choice = await actionSheet({
+      title: t("bulk.type"),
+      items: TYPES.map((type) => ({ id: type, label: typeLabel(type), icon: `type-${type}` })),
+    });
+    if (!choice) return;
+    await eachSelected((record) => ({ ...record, type: choice }));
+    toast(t("bulk.type.done", { count: selected.size, type: typeLabel(choice) }), "success");
+    setSelecting(false);
+  });
+
+  $("btn-bulk-delete").addEventListener("click", async () => {
+    const count = selected.size;
+    // A confirm dialog, not undo-on-toast: forty records is past the point
+    // where "did I mean that?" is answerable from a disappearing toast.
+    const ok = await confirmDialog(t("bulk.delete.confirm", { count }), t("action.delete"));
+    if (!ok) return;
+    for (const id of selected) await softDeleteItem(id);
+    toast(t("bulk.delete.done", { count }), "info");
+    setSelecting(false);
+    callbacks.onChanged();
+  });
+
+  $("btn-bulk-export").addEventListener("click", async () => {
+    const all = await getAllItems();
+    callbacks.onExport(all.filter((r) => selected.has(r.id)));
+    setSelecting(false);
+  });
+}
+
+/** Apply a change to every selected record, one write each. */
+async function eachSelected(transform) {
+  for (const id of selected) {
+    const record = await getItem(id);
+    if (record) await putItem(transform(record));
+  }
+  callbacks.onChanged();
 }
 
 function clearFilters() {
@@ -162,6 +397,7 @@ function clearFilters() {
   $("date-from").value = "";
   $("date-to").value = "";
   paintTypeFilters();
+  paintViews();
   refreshList();
 }
 
@@ -331,6 +567,10 @@ export async function refreshList() {
   // and a chip row still showing "Alles" over a filtered list is the UI lying
   // about why records are missing.
   paintTypeFilters();
+  // Same reasoning for the saved views: a view chip still marked active over a
+  // filter set that no longer matches it says the list is showing something it
+  // is not.
+  paintViews();
   await paintTagFilters();
   await renderPage({ keepScroll: false });
 }
@@ -478,7 +718,7 @@ function paintPlaceholder(filtering) {
 
 function buildRow(item, today) {
   const li = document.createElement("li");
-  li.className = "record";
+  li.className = `record${selecting && selected.has(item.id) ? " is-selected" : ""}`;
   li.dataset.id = item.id;
   li.style.setProperty("--record-colour", `var(--type-${item.type})`);
   // The labels revealed behind a swipe, rendered by CSS content: attr(...).
@@ -573,7 +813,12 @@ function buildRow(item, today) {
   }
   button.append(marks);
 
-  button.addEventListener("click", () => callbacks.onOpen(item.id));
+  // In selection mode a tap TICKS the row instead of opening it — the one
+  // interaction that has to change, and the reason selection is a mode at all.
+  button.addEventListener("click", () => {
+    if (selecting) toggleSelected(item.id);
+    else callbacks.onOpen(item.id);
+  });
   surface.append(button);
   li.append(surface);
   return li;

@@ -64,6 +64,7 @@ import {
   nextOccurrence, completeReminder, dueNotification,
   computeSpend, computeIncidents, computeUpcoming,
   normalizeFields, FIELD_SUGGESTIONS, FIELD_SUGGESTION_KEYS, countEventsBySubject,
+  normalizeViews, isEmptyFilterSet, SAVED_VIEW_MAX,
   versionKey, versionKeyRange, VERSION_KEEP, STORE_VERSIONS,
   diffRecords, applyVersion, DIFFABLE_FIELDS, getVersions, clearVersions,
   normalizeSearchText, buildHaystack, stripTrackingParams, normalizeUrl,
@@ -1818,6 +1819,42 @@ assertDeepEqual(normalizeFields([]), [], "empty stays empty");
   const after = { ...before, fields: [{ id: "1", key: "Serie", value: "BBB" }] };
   assertDeepEqual(diffRecords(before, after), ["fields"], "a changed detail shows in a revision diff");
 }
+
+group("db.js · saved views");
+
+assertDeepEqual(normalizeViews(null), [], "null gives no views");
+assertDeepEqual(normalizeViews([{ name: "  " }]), [], "a view with no name is dropped");
+{
+  const out = normalizeViews([{ name: " Verzekeringen ", filters: { type: "utilities", tags: ["huis"] } }]);
+  assertEqual(out.length, 1, "a named view survives");
+  assertEqual(out[0].name, "Verzekeringen", "the name is trimmed");
+  assertEqual(out[0].filters.type, "utilities", "its filters are kept");
+  assertDeepEqual(out[0].filters.tags, ["huis"], "…including tags");
+  assertEqual(out[0].filters.sortBy, "updatedAt", "a missing sort field falls back rather than breaking the query");
+  assertEqual(out[0].filters.sortDir, "desc", "…and so does the direction");
+  assertTrue(!!out[0].id, "an id is minted");
+}
+{
+  const out = normalizeViews([{ name: "x", filters: { sortBy: "nonsense", sortDir: "sideways" } }]);
+  assertEqual(out[0].filters.sortBy, "updatedAt",
+    "an unknown sort field is refused — it would silently break every use of the view");
+  assertEqual(out[0].filters.sortDir, "desc", "…as is an unknown direction");
+}
+{
+  const many = Array.from({ length: 20 }, (_, i) => ({ name: `v${i}` }));
+  assertEqual(normalizeViews(many).length, SAVED_VIEW_MAX, "the list is capped");
+}
+{
+  const long = normalizeViews([{ name: "n".repeat(200) }]);
+  assertEqual(long[0].name.length, 40, "names are capped");
+}
+
+assertTrue(isEmptyFilterSet(null), "no filters is empty");
+assertTrue(isEmptyFilterSet({ search: "  ", type: "", tags: [] }), "blank filters are empty");
+assertTrue(!isEmptyFilterSet({ type: "devices" }), "a type is a filter");
+assertTrue(!isEmptyFilterSet({ tags: ["huis"] }), "a tag is a filter");
+assertTrue(!isEmptyFilterSet({ search: "ketel" }), "a search is a filter");
+assertTrue(!isEmptyFilterSet({ dateFrom: "2026-01-01" }), "a date is a filter");
 
 group("db.js · countEventsBySubject");
 

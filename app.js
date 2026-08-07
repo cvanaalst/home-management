@@ -34,6 +34,7 @@ import {
   deleteWithUndo,
   revealFilters,
   remeasureTypeFilters,
+  exitSelection,
 } from "./view-list.js";
 import {
   initDetailView,
@@ -56,6 +57,7 @@ import {
   paintEncryption,
   printRecords,
   printEvents,
+  exportRecords,
   renderHelp,
   refreshSettingsLanguage,
 } from "./view-settings.js";
@@ -131,6 +133,9 @@ function renderView(view, id) {
     $("btn-back").hidden = !PUSH_TARGETS.includes(view);
     // The toolbar Save belongs to the detail view alone.
     if (view !== "detail") hideTopbarSave();
+    // A selection must never survive leaving the list: acting on records you
+    // forgot were ticked is the one way bulk actions go badly wrong.
+    if (view !== "list") exitSelection();
 
     document.querySelectorAll(".tab").forEach((tab) => {
       if (tab.dataset.tab === view) tab.setAttribute("aria-current", "page");
@@ -711,6 +716,8 @@ function initViews() {
     // §8.1: pull-to-refresh reaches "Sync now". Non-interactive, so it never
     // throws a sign-in popup at someone who only wanted to refresh a list.
     onPullRefresh: () => syncNow({ interactive: false }),
+    onChanged: () => dataChanged(),
+    onExport: (records) => exportRecords(records),
   });
 
   initDetailView({

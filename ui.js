@@ -228,6 +228,60 @@ export function confirmDialog(message, okLabel, { danger = true } = {}) {
 }
 
 /** Promise<void>. A message the user must acknowledge. */
+/**
+ * Ask for one line of text. Promise<string|null> — null when cancelled.
+ *
+ * Built on the same dialog as confirmDialog so the focus trap, Escape handling
+ * and button order are shared rather than reimplemented for one input.
+ */
+export function promptText(message, okLabel, { placeholder = "" } = {}) {
+  return new Promise((resolve) => {
+    const { overlay, box, okBtn, cancelBtn } = buildDialog({
+      message,
+      okLabel: okLabel || t("action.confirm"),
+      cancelLabel: t("action.cancel"),
+      danger: false,
+    });
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "input";
+    input.placeholder = placeholder;
+    input.setAttribute("aria-label", message);
+    box.querySelector(".dialog__message").after(input);
+
+    const release = trapFocus(box);
+    input.focus();
+
+    const done = (value) => {
+      document.removeEventListener("keydown", onEsc, true);
+      release();
+      overlay.remove();
+      resolve(value);
+    };
+    const onEsc = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        done(null);
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const value = input.value.trim();
+        if (value) done(value);
+      }
+    });
+
+    okBtn.addEventListener("click", () => {
+      const value = input.value.trim();
+      done(value || null);
+    });
+    cancelBtn.addEventListener("click", () => done(null));
+    document.addEventListener("keydown", onEsc, true);
+  });
+}
+
 export function alertDialog(message, okLabel) {
   return new Promise((resolve) => {
     const { overlay, box, okBtn } = buildDialog({

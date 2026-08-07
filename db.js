@@ -1140,6 +1140,53 @@ export function countEventsBySubject(items) {
   return counts;
 }
 
+/**
+ * A named filter set, pinned above the list. PURE helpers only; the storage is
+ * an ordinary meta key.
+ *
+ * Saved views are what turn filtering from a chore into navigation: "insurance
+ * renewals" or "everything overdue" become one tap rather than four controls
+ * set the same way every time.
+ *
+ * Deliberately NOT synced — they are a per-device convenience, and syncing
+ * them would mean merging them, which is a whole conflict story for something
+ * you can recreate in five seconds.
+ */
+export const SAVED_VIEW_MAX = 8;
+
+/** Clean a stored view list. PURE. */
+export function normalizeViews(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v) => v && typeof v === "object" && String(v.name || "").trim())
+    .slice(0, SAVED_VIEW_MAX)
+    .map((v) => ({
+      id: v.id || makeId(),
+      name: String(v.name).trim().slice(0, 40),
+      filters: {
+        search: String(v.filters?.search || ""),
+        type: String(v.filters?.type || ""),
+        tags: Array.isArray(v.filters?.tags) ? v.filters.tags.map(String) : [],
+        dateFrom: String(v.filters?.dateFrom || ""),
+        dateTo: String(v.filters?.dateTo || ""),
+        sortBy: SORT_FIELDS.includes(v.filters?.sortBy) ? v.filters.sortBy : "updatedAt",
+        sortDir: v.filters?.sortDir === "asc" ? "asc" : "desc",
+      },
+    }));
+}
+
+/** True when a filter set would select everything — nothing worth saving. PURE. */
+export function isEmptyFilterSet(filters) {
+  if (!filters) return true;
+  return (
+    !String(filters.search || "").trim() &&
+    !filters.type &&
+    !(filters.tags || []).length &&
+    !filters.dateFrom &&
+    !filters.dateTo
+  );
+}
+
 /** Every id referenced by any live record. PURE. */
 export function computeLinkedIdSet(items) {
   const set = new Set();

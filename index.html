@@ -74,6 +74,10 @@
                  data-i18n-placeholder="list.search" data-i18n-aria="list.search.aria"
                  autocomplete="off" spellcheck="false">
         </div>
+        <button type="button" class="btn btn--ghost btn--icon" id="btn-select"
+                data-i18n-aria="bulk.select" data-i18n-title="bulk.select">
+          <span data-icon="check" data-icon-size="18"></span>
+        </button>
         <button type="button" class="btn btn--ghost btn--icon" id="btn-filters"
                 aria-expanded="false" aria-controls="filter-panel"
                 data-i18n-aria="list.filter.aria" data-i18n-title="list.filter">
@@ -88,6 +92,23 @@
              data-i18n-aria="list.filter"></div>
         <button type="button" class="chip-group__toggle" id="btn-types-toggle"
                 aria-expanded="false" aria-controls="type-filters" hidden></button>
+      </div>
+
+      <div class="chip-row chip-row--views" id="saved-views" role="group"
+           data-i18n-aria="views.title" hidden></div>
+
+      <div class="selection-bar" id="selection-bar" role="group" hidden>
+        <span class="selection-bar__count" id="selection-count" aria-live="polite"></span>
+        <button type="button" class="btn btn--ghost btn--small" id="btn-bulk-tag"
+                data-i18n="bulk.tag">Label</button>
+        <button type="button" class="btn btn--ghost btn--small" id="btn-bulk-type"
+                data-i18n="bulk.type">Soort</button>
+        <button type="button" class="btn btn--ghost btn--small" id="btn-bulk-export"
+                data-i18n="bulk.export">Exporteren</button>
+        <button type="button" class="btn btn--ghost btn--small btn--danger-text" id="btn-bulk-delete"
+                data-i18n="action.delete">Verwijderen</button>
+        <button type="button" class="btn btn--ghost btn--small" id="btn-selection-done"
+                data-i18n="bulk.done">Klaar</button>
       </div>
 
       <div class="filter-panel" id="filter-panel" hidden>
@@ -109,6 +130,8 @@
           <div class="chip-row" id="tag-filters" role="group"></div>
         </div>
 
+        <button type="button" class="btn btn--ghost btn--small" id="btn-save-view"
+                data-i18n="views.save">Weergave bewaren</button>
         <button type="button" class="btn btn--ghost btn--small" id="btn-clear-filters"
                 data-i18n="list.clearFilters">Filters wissen</button>
       </div>
