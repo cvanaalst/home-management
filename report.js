@@ -11,8 +11,8 @@
  * Tests hand it a stub.
  */
 
-import { formatDate, formatDateTime, daysUntil } from "./ui.js";
-import { renderMarkdown } from "./markdown.js";
+import { formatDate, formatDateTime, daysUntil, formatAmount } from "./ui.js";
+import { renderMarkdown, markdownToPlain } from "./markdown.js";
 
 /** Local escape — report.js builds HTML strings and must not trust any field. */
 function esc(value) {
@@ -170,6 +170,123 @@ function reminderCell(record, { t, lang, today }) {
  * @param {{t:Function, lang:string, today:string, includeBody:boolean,
  *          title:string, single:boolean, types?:string[]}} opts
  */
+/**
+ * The event log as a printable document, grouped by month. PURE.
+ *
+ * A different shape from the record print on purpose. Records print grouped by
+ * TYPE, because that is how you look something up. Events print in date order,
+ * because a history only means anything in sequence — and it ends with what it
+ * all cost, which is the question anyone printing a maintenance log is
+ * actually asking.
+ *
+ * `records` is the whole set: events name their subject by id, and the print
+ * has to resolve those to titles.
+ */
+export function buildEventPrintHtml(events, records, opts = {}) {
+  const { t, lang = "nl", title } = opts;
+  const label = t || ((key) => key);
+  const live = (events || []).filter((e) => e && !e.deletedAt);
+  const byId = new Map((records || []).filter((r) => r && !r.deletedAt).map((r) => [r.id, r]));
+
+  const total = live.reduce((sum, e) => sum + (typeof e.amount === "number" ? e.amount : 0), 0);
+  const withAmount = live.filter((e) => typeof e.amount === "number").length;
+
+  const head =
+    `<header class="print__head">` +
+    `<h1>${esc(title || label("print.events.title"))}</h1>` +
+    `<p class="print__meta">${esc(label("print.generated"))} ` +
+    `${esc(formatDateTime(new Date().toISOString(), lang))} · ` +
+    `${esc(label("print.events.count", { count: live.length }))}` +
+    (withAmount
+      ? ` · ${esc(label("print.events.total", { amount: formatAmount(total, lang) }))}`
+      : "") +
+    `</p></header>`;
+
+  if (!live.length) {
+    return `${head}<p class="print__empty">${esc(label("print.events.none"))}</p>`;
+  }
+
+  // Newest first, matching the timeline the user printed from.
+  const sorted = [...live].sort((a, b) =>
+    String(b.occurredAt || "").localeCompare(String(a.occurredAt || ""))
+  );
+
+  const months = [];
+  const index = new Map();
+  for (const event of sorted) {
+    const key = String(event.occurredAt || "").slice(0, 7) || "—";
+    if (!index.has(key)) {
+      index.set(key, { key, events: [] });
+      months.push(index.get(key));
+    }
+    index.get(key).events.push(event);
+  }
+
+  const subjectOf = (event) => {
+    for (const id of event.linkedIds || []) {
+      const subject = byId.get(id);
+      if (subject && subject.kind !== "event") return subject.title || "";
+    }
+    return "";
+  };
+
+  const body = months
+    .map((month) => {
+      const monthTotal = month.events.reduce(
+        (sum, e) => sum + (typeof e.amount === "number" ? e.amount : 0),
+        0
+      );
+      return (
+        `<section class="print__group">` +
+        `<h2>${esc(monthLabel(month.key, lang))}` +
+        (monthTotal ? ` <span class="print__total">${esc(formatAmount(monthTotal, lang))}</span>` : "") +
+        `</h2>` +
+        `<table><thead><tr>` +
+        `<th>${esc(label("print.col.date"))}</th>` +
+        `<th>${esc(label("print.col.event"))}</th>` +
+        `<th>${esc(label("print.col.what"))}</th>` +
+        `<th>${esc(label("print.col.subject"))}</th>` +
+        `<th class="print__num">${esc(label("print.col.amount"))}</th>` +
+        `</tr></thead><tbody>` +
+        month.events
+          .map(
+            (event) =>
+              `<tr>` +
+              `<td>${esc(event.occurredAt ? formatDate(event.occurredAt, lang) : "—")}</td>` +
+              `<td>${esc(event.title || "—")}</td>` +
+              `<td>${esc(label(`eventType.${event.eventType}`))}</td>` +
+              `<td>${esc(subjectOf(event) || "—")}</td>` +
+              `<td class="print__num">${
+                typeof event.amount === "number" ? esc(formatAmount(event.amount, lang)) : ""
+              }</td>` +
+              `</tr>` +
+              (event.body && event.body.trim()
+                ? `<tr class="print__note"><td></td><td colspan="4">${esc(
+                    markdownToPlain(event.body, 400)
+                  )}</td></tr>`
+                : "")
+          )
+          .join("") +
+        `</tbody></table></section>`
+      );
+    })
+    .join("");
+
+  return head + body;
+}
+
+/** "augustus 2026" from "2026-08". PURE — kept here so report.js stays standalone. */
+function monthLabel(key, lang) {
+  if (!/^\d{4}-\d{2}$/.test(key)) return key;
+  const d = new Date(`${key}-01T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return key;
+  return d.toLocaleDateString(lang === "en" ? "en-GB" : "nl-BE", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 export function buildPrintHtml(records, opts = {}) {
   const { t, lang = "nl", today, includeBody = true, title, single = false, types } = opts;
   const label = t || ((key) => key);

@@ -25,7 +25,13 @@ import {
   setMeta,
 } from "./db.js";
 import { toast, formatBytes, formatDateTime, todayIso, escapeHtml } from "./ui.js";
-import { toJsonExport, toCsv, buildPrintHtml, exportFilename } from "./report.js";
+import {
+  toJsonExport,
+  toCsv,
+  buildPrintHtml,
+  buildEventPrintHtml,
+  exportFilename,
+} from "./report.js";
 import { buildIcs, icsCount } from "./calendar.js";
 import { renderMarkdown } from "./markdown.js";
 import { helpText } from "./help.js";
@@ -803,6 +809,18 @@ export async function printRecords(records, { single = false, title } = {}) {
     types: TYPES,
   });
   // Let the layout settle before the print dialog snapshots the page.
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  window.print();
+}
+
+/**
+ * Print the event log, honouring whatever the timeline is currently filtered
+ * to. Printing "everything" when the screen shows one boiler's incidents would
+ * be answering a question nobody asked.
+ */
+export async function printEvents(events, records, { title } = {}) {
+  const root = $("print-root");
+  root.innerHTML = buildEventPrintHtml(events, records, { t, lang: state.lang, title });
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   window.print();
 }

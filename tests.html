@@ -36,11 +36,11 @@
 import {
   escapeHtml, formatDate, formatDateTime, daysUntil, todayIso, formatBytes,
   reminderTone, reminderLabel, isPreviewable, previewKind, replaceExtension,
-  formatMonth, formatAmount,
+  formatMonth, formatAmount, formatDayMonth,
 } from "./ui.js";
 import { renderMarkdown, markdownToPlain, safeUrl } from "./markdown.js";
 import {
-  toJsonExport, toCsv, csvCell, recordToRow, groupByType, buildPrintHtml,
+  toJsonExport, toCsv, csvCell, recordToRow, groupByType, buildPrintHtml, buildEventPrintHtml,
   exportFilename, CSV_COLUMNS, CSV_SEPARATOR,
 } from "./report.js";
 import { helpText } from "./help.js";
@@ -903,6 +903,13 @@ assertEqual(formatMonth(null), "", "null gives empty");
 assertEqual(formatMonth("nonsense"), "", "unparseable gives empty, never 'Invalid Date'");
 assertEqual(formatMonth("2026"), "", "a bare year is not a month");
 
+group("ui.js · formatDayMonth");
+
+assertEqual(formatDayMonth("2026-07-18", "nl"), "18 jul", "day and month, no year");
+assertEqual(formatDayMonth("2026-07-18", "en"), "18 Jul", "…in English");
+assertEqual(formatDayMonth(""), "", "empty gives empty");
+assertEqual(formatDayMonth("nonsense"), "", "unparseable gives empty, never 'Invalid Date'");
+
 group("ui.js · formatAmount");
 
 assertTrue(formatAmount(89.5, "nl").includes("89,50"), "Dutch uses a decimal comma and two places");
@@ -1148,6 +1155,55 @@ assertEqual(
   "a formula-injection payload is both neutralised and quoted"
 );
 assertEqual(csvCell("mid=dle"), "mid=dle", "an = that is not leading is left alone");
+
+group("report.js · buildEventPrintHtml");
+
+{
+  const stub = (key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key);
+  const boiler = fx({ id: "b", type: "devices", title: "CV-ketel Remeha" });
+  const events = [
+    fx({ id:"e1", kind:"event", eventType:"maintenance", title:"Jaarlijks onderhoud",
+         occurredAt:"2026-03-12", amount:129, linkedIds:["b"] }),
+    fx({ id:"e2", kind:"event", eventType:"incident", title:"Storing F28",
+         occurredAt:"2026-03-28", amount:89.5, linkedIds:["b"], body:"Warm water viel uit." }),
+    fx({ id:"e3", kind:"event", eventType:"payment", title:"Jaarpremie",
+         occurredAt:"2026-06-01", amount:340.5 }),
+  ];
+  const html = buildEventPrintHtml(events, [boiler, ...events], { t: stub, lang: "nl" });
+
+  assertTrue(html.includes("juni 2026"), "grouped by month, in the reader's language");
+  assertTrue(html.includes("maart 2026"), "…every month present");
+  assertTrue(html.indexOf("juni 2026") < html.indexOf("maart 2026"),
+    "newest month FIRST, matching the timeline it was printed from");
+  assertTrue(html.includes("Storing F28"), "events are listed");
+  assertTrue(html.includes("CV-ketel Remeha"),
+    "the subject is resolved from its id — 'filter replaced' is useless without knowing which boiler");
+  assertTrue(html.includes("Warm water viel uit."), "a note is printed under its event");
+  assertTrue(/559|\u20ac/.test(html), "the total is shown");
+}
+{
+  const stub = (key) => key;
+  const html = buildEventPrintHtml([], [], { t: stub });
+  assertTrue(html.includes("print.events.none"), "an empty log says so rather than printing a blank page");
+  assertTrue(!html.includes("<table"), "…and draws no empty table");
+}
+{
+  // A deleted event must not appear on a printed maintenance record.
+  const stub = (key) => key;
+  const dead = fx({ id:"d", kind:"event", title:"Weg", occurredAt:"2026-03-01",
+                    deletedAt:"2026-03-02T00:00:00.000Z" });
+  assertTrue(!buildEventPrintHtml([dead], [dead], { t: stub }).includes("Weg"),
+    "tombstones are excluded from the print");
+}
+{
+  // An event whose subject was deleted still prints; it just has no subject.
+  const stub = (key) => key;
+  const orphan = fx({ id:"o", kind:"event", title:"Losse gebeurtenis", occurredAt:"2026-03-01",
+                      linkedIds:["gone"] });
+  const html = buildEventPrintHtml([orphan], [orphan], { t: stub });
+  assertTrue(html.includes("Losse gebeurtenis"), "it is still printed");
+  assertTrue(html.includes("—"), "…with a dash where the subject would be");
+}
 
 group("report.js · events in the export");
 

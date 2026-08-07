@@ -1100,8 +1100,15 @@ body[data-density="compact"] .record-list {
 }
 
 /* Read-only fields stay selectable (you still want to copy a contract number)
-   but stop looking like something you can type into. */
-.input:read-only,
+   but stop looking like something you can type into.
+   
+   Scoped to input and textarea deliberately. `:read-only` matches any element
+   that is not `:read-write`, and a <select> never is — so a bare
+   `.input:read-only` matched EVERY dropdown in the app, enabled or not, and
+   quietly stripped the border and background off all of them. Only fields that
+   can genuinely be read-only should be styled as though they are. */
+input.input:read-only,
+textarea.input:read-only,
 .input:disabled {
   background: transparent;
   border-color: transparent;
@@ -1486,6 +1493,29 @@ body:not(.is-locked) .detail__title {
 /* A row of controls INSIDE a stacked cell. It must not inherit .detail__cell's
    `flex: 1 1 200px`, which in a column axis means "grow vertically" and left
    the repeat controls floating in the middle of a tall empty box. */
+/* The three event fields — date, what happened, amount — as a grid rather than
+   a wrapping flex row. `detail__cell` carries `flex: 1 1 200px`, which on a
+   phone means one field per line and three tall stacked cells for what is
+   really one short answer. auto-fit at a 130px minimum gives two columns on a
+   phone and three on a desktop, from the same rule. */
+.detail__grid--event {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--space-2);
+}
+
+.detail__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.detail__field .input {
+  width: 100%;
+  min-width: 0;
+}
+
 .detail__row {
   display: flex;
   align-items: center;
@@ -2447,6 +2477,29 @@ body:not(.is-locked) .detail__title {
   padding: var(--space-2) var(--space-3);
 }
 
+/* ── Compact density ──────────────────────────────────────────────────────
+   Month headings are SIBLINGS of the rows, not wrappers, so the record list's
+   trick of collapsing everything into one bordered block does not transfer —
+   a heading would end up inside the border. Tightening the rows themselves
+   gets the same space back without fighting the structure. */
+body[data-density="compact"] .timeline__list {
+  gap: var(--space-1);
+}
+
+body[data-density="compact"] .timeline__row {
+  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+}
+
+body[data-density="compact"] .timeline__month {
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+/* One line means the title must be allowed to ellipsise rather than wrap. */
+body[data-density="compact"] .timeline__title {
+  font-weight: 500;
+}
+
 .input--narrow {
   width: 5.5rem;
   flex: 0 0 auto;
@@ -2710,6 +2763,24 @@ body:not(.is-locked) .detail__title {
 .tile--accent .tile__value {
   color: var(--accent);
   font-size: var(--step-2);
+}
+
+.print__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.print__total {
+  float: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A note under its own event, indented and quiet, so the table still scans. */
+.print__note td {
+  padding-top: 0;
+  color: #444;
+  font-size: 0.9em;
 }
 
 /* ==========================================================================

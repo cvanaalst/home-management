@@ -270,10 +270,10 @@ function buildEvent() {
   el.eventPanel = wrap;
 
   const row = document.createElement("div");
-  row.className = "detail__grid";
+  row.className = "detail__grid detail__grid--event";
 
   const dateCell = document.createElement("div");
-  dateCell.className = "detail__cell detail__cell--stack";
+  dateCell.className = "detail__field";
   const dateLabel = document.createElement("span");
   dateLabel.className = "field__label";
   dateLabel.dataset.i18n = "event.occurredAt";
@@ -284,7 +284,7 @@ function buildEvent() {
   dateCell.append(dateLabel, el.occurredAt);
 
   const typeCell = document.createElement("div");
-  typeCell.className = "detail__cell detail__cell--stack";
+  typeCell.className = "detail__field";
   const typeLabelEl = document.createElement("span");
   typeLabelEl.className = "field__label";
   typeLabelEl.dataset.i18n = "eventType.label";
@@ -294,7 +294,7 @@ function buildEvent() {
   typeCell.append(typeLabelEl, el.eventType);
 
   const amountCell = document.createElement("div");
-  amountCell.className = "detail__cell detail__cell--stack";
+  amountCell.className = "detail__field";
   const amountLabel = document.createElement("span");
   amountLabel.className = "field__label";
   amountLabel.dataset.i18n = "event.amount";

@@ -289,6 +289,19 @@ export function formatDateTime(iso, lang = "nl") {
 }
 
 /**
+ * "18 jul" / "18 Jul" — a date with the year left off.
+ *
+ * For rows that already sit under a month heading, where repeating the year
+ * costs width the title needs and tells the reader nothing.
+ */
+export function formatDayMonth(iso, lang = "nl") {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(LOCALE[lang] || LOCALE.nl, { day: "numeric", month: "short" });
+}
+
+/**
  * "augustus 2026" / "August 2026", from a "YYYY-MM" or "YYYY-MM-DD" string.
  * Returns "" for empty or unparseable input.
  *

@@ -55,6 +55,7 @@ import {
   paintNotify,
   paintEncryption,
   printRecords,
+  printEvents,
   renderHelp,
   refreshSettingsLanguage,
 } from "./view-settings.js";
@@ -688,6 +689,7 @@ function initViews() {
 
   initTimelineView({
     onOpen: (id) => navigate("detail", { id }),
+    onPrint: (events, records) => printEvents(events, records, { title: t("print.events.title") }),
   });
 
   initTrashView({
@@ -702,7 +704,12 @@ function initViews() {
     onSynced: () => dataChanged(),
     onPreferenceChange: (key) => {
       if (key === "theme") syncThemeColorMeta();
-      if (key === "density") refreshList();
+      if (key === "density") {
+        refreshList();
+        // The timeline honours density as well; refreshing only the list left
+        // it at whatever density it happened to be built with.
+        if (state.currentView === "timeline") renderTimeline();
+      }
       if (key === "lang") refreshLanguage();
       if (key === "locked") applyLock(state.locked);
       else paintSettings();

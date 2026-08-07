@@ -20,13 +20,13 @@ import { state } from "./state.js";
 import { t, typeLabel, eventTypeLabel } from "./i18n.js";
 import { icon, eventIcon } from "./icons.js";
 import { TYPES, EVENT_TYPES, queryItems, getAllItems } from "./db.js";
-import { formatDate, formatMonth, formatAmount } from "./ui.js";
+import { formatDate, formatDayMonth, formatMonth, formatAmount } from "./ui.js";
 
 const PAGE_SIZE = 40;
 
 const $ = (id) => document.getElementById(id);
 
-let callbacks = { onOpen: () => {}, onNew: () => {} };
+let callbacks = { onOpen: () => {}, onNew: () => {}, onPrint: () => {} };
 let root;
 let listEl;
 let placeholderEl;
@@ -113,7 +113,17 @@ function buildControls() {
   el.filterToggle.setAttribute("aria-controls", "timeline-filter-panel");
   el.filterToggle.innerHTML = icon("filter", { size: 18 });
 
-  row.append(field, el.filterToggle);
+  // Printing is reading, not editing — deliberately NOT .edit-only, so a
+  // maintenance log can be printed while the app is locked.
+  el.print = document.createElement("button");
+  el.print.type = "button";
+  el.print.className = "btn btn--ghost btn--icon";
+  el.print.id = "btn-timeline-print";
+  el.print.dataset.i18nAria = "print.events";
+  el.print.dataset.i18nTitle = "print.events";
+  el.print.innerHTML = icon("print", { size: 18 });
+
+  row.append(field, el.print, el.filterToggle);
 
   // Seven event types wrap to three lines on a phone. Same treatment as the
   // overview's type chips: collapsed to one line, with a toggle that appears
@@ -264,6 +274,7 @@ function bindControls() {
   });
 
   el.clear.addEventListener("click", clearFilters);
+  el.print.addEventListener("click", printCurrent);
 
   el.chipToggle.addEventListener("click", () => {
     chipsAutoExpanded = false; // an explicit choice outranks the automatic one
@@ -340,6 +351,29 @@ function measureChipOverflow() {
 /** Re-measure once the view is genuinely on screen. Called by app.js. */
 export function remeasureTimelineChips() {
   measureChipOverflow();
+}
+
+/**
+ * Print exactly what is on screen.
+ *
+ * Re-runs the query with no limit rather than printing the loaded page: the
+ * list shows forty at a time, and a printed log that stops at forty for no
+ * visible reason is worse than no log.
+ */
+async function printCurrent() {
+  const { results } = await queryItems({
+    kind: "event",
+    search: filters.search,
+    eventType: filters.eventType,
+    type: filters.type,
+    dateFrom: filters.dateFrom,
+    dateTo: filters.dateTo,
+    dateField: "occurredAt",
+    sortBy: "occurredAt",
+    sortDir: filters.sortDir,
+    pinnedFirst: false,
+  });
+  callbacks.onPrint(results, await getAllItems());
 }
 
 function clearFilters() {
@@ -541,16 +575,29 @@ function buildRow(event, subjects) {
   const text = document.createElement("span");
   text.className = "timeline__text";
 
+  const compact = state.density === "compact";
+
   const head = document.createElement("span");
   head.className = "timeline__title";
   head.textContent = event.title || t("timeline.untitled");
 
   const meta = document.createElement("span");
   meta.className = "timeline__meta";
-  const bits = [
-    event.occurredAt ? formatDate(event.occurredAt, state.lang) : t("timeline.undated"),
-    eventTypeLabel(event.eventType),
-  ];
+
+  // Compact collapses the row to ONE line, the way the record list's compact
+  // does — anything less is not the density the user asked for.
+  //
+  // What survives, in priority order: the date, because a timeline without one
+  // is just a list; the title; and the subject, because "filter replaced" is
+  // useless without knowing which boiler. What goes is the event-type WORD,
+  // which the coloured icon on the left already says.
+  // Compact drops the YEAR too: every row already sits under a month heading
+  // that states it, so repeating it costs width the title needs.
+  const when = event.occurredAt
+    ? (compact ? formatDayMonth : formatDate)(event.occurredAt, state.lang)
+    : t("timeline.undated");
+  const bits = [when];
+  if (!compact) bits.push(eventTypeLabel(event.eventType));
 
   // Name the subject, not just the event: "filter replaced" is useless without
   // knowing which of the two boilers it was.
@@ -561,9 +608,19 @@ function buildRow(event, subjects) {
       break;
     }
   }
-  meta.textContent = bits.join(" · ");
+  if (compact) {
+    // Date leads, then the title, then the subject after an en dash. The
+    // subject is last so it is the first thing to ellipsise on a narrow
+    // screen, which is the right order to lose things in.
+    const [when, ...rest] = bits;
+    head.textContent = `${when} · ${event.title || t("timeline.untitled")}`;
+    if (rest.length) head.textContent += ` – ${rest.join(" · ")}`;
+    text.append(head);
+  } else {
+    meta.textContent = bits.join(" · ");
+    text.append(head, meta);
+  }
 
-  text.append(head, meta);
   row.append(glyph, text);
 
   if (typeof event.amount === "number") {

@@ -132,6 +132,16 @@ const dict = {
     "export.ics.empty": "Geen herinneringen om te exporteren.",
     "reminder.toCalendar": "Aan agenda toevoegen",
     "reminder.toCalendar.done": "Agenda-bestand gedownload",
+    "print.events": "Logboek afdrukken",
+    "print.events.title": "Logboek \u2014 wat er gebeurd is",
+    "print.events.count": "{count} gebeurtenissen",
+    "print.events.total": "{amount} in totaal",
+    "print.events.none": "Geen gebeurtenissen om af te drukken.",
+    "print.col.date": "Datum",
+    "print.col.event": "Gebeurtenis",
+    "print.col.what": "Soort",
+    "print.col.subject": "Hoort bij",
+    "print.col.amount": "Bedrag",
     "panel.empty": "leeg",
     "panel.filled": "ingevuld",
     "nav.timeline": "Tijdlijn",
@@ -155,8 +165,7 @@ const dict = {
     "event.occurredAt": "Datum",
     "event.amount": "Bedrag",
     "event.amount.placeholder": "bv. 89,50",
-    "event.hint":
-      "De datum is wanneer het gebeurde, niet wanneer je het opschreef. Het bedrag is optioneel en telt mee in de totalen.",
+    "event.hint": "De datum is wanneer het gebeurde, niet wanneer je het opschreef.",
 
     // ── a record's own history (§5) ─────────────────────────────────────────
     "history.section": "Geschiedenis",
@@ -670,6 +679,16 @@ const dict = {
     "export.ics.empty": "No reminders to export.",
     "reminder.toCalendar": "Add to calendar",
     "reminder.toCalendar.done": "Calendar file downloaded",
+    "print.events": "Print the log",
+    "print.events.title": "Log \u2014 what happened",
+    "print.events.count": "{count} events",
+    "print.events.total": "{amount} in total",
+    "print.events.none": "No events to print.",
+    "print.col.date": "Date",
+    "print.col.event": "Event",
+    "print.col.what": "Type",
+    "print.col.subject": "Belongs to",
+    "print.col.amount": "Amount",
     "panel.empty": "empty",
     "panel.filled": "filled in",
     "nav.timeline": "Timeline",
@@ -693,8 +712,7 @@ const dict = {
     "event.occurredAt": "Date",
     "event.amount": "Amount",
     "event.amount.placeholder": "e.g. 89.50",
-    "event.hint":
-      "The date is when it happened, not when you wrote it down. The amount is optional and counts towards the totals.",
+    "event.hint": "The date is when it happened, not when you wrote it down.",
 
     // ── a record's own history (§5) ─────────────────────────────────────────
     "history.section": "History",
